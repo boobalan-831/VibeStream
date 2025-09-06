@@ -142,132 +142,46 @@ const EnhancedMusicApp: React.FC = () => {
     loadHomeCategories();
   }, []);
 
-  // Load trending songs using enhanced service
+  // Load trending songs using fetch API - EXACTLY as you specified
   const loadTrendingSongs = async () => {
     try {
-      console.log('🔥 Loading trending songs...');
-      const response = await enhancedMusicService.getTrendingSongs();
+      const [trendingResponse, rotationResponse] = await Promise.all([
+        fetch('https://saavn.dev/api/search/songs?query=trending'),
+        fetch('https://saavn.dev/api/search/songs?query=popular')
+      ]);
       
-      if (response.success && response.data.results.length > 0) {
-        setTrendingSongs(response.data.results.slice(0, 20));
-        console.log(`✅ Loaded ${response.data.results.length} trending songs`);
-      }
+      const trendingData = await trendingResponse.json();
+      const rotationData = await rotationResponse.json();
+      
+      setTrendingSongs(trendingData.data.results || []);
+      console.log(`✅ Loaded ${(trendingData.data.results || []).length} trending songs`);
     } catch (error) {
-      console.error('❌ Failed to load trending songs:', error);
+      console.error('Failed to load trending songs:', error);
       setTrendingSongs([]);
     }
   };
 
-  // Load home page categories
+  // Load home page categories using your exact logic
   const loadHomeCategories = async () => {
     try {
-      console.log('🏠 Loading home categories with real API...');
-      
-      // Use multiple API calls to get variety of songs
-      const [trendingResponse, popularResponse, tamilResponse] = await Promise.all([
+      const [trendingResponse, rotationResponse] = await Promise.all([
         fetch('https://saavn.dev/api/search/songs?query=trending'),
-        fetch('https://saavn.dev/api/search/songs?query=popular'),
-        fetch('https://saavn.dev/api/search/songs?query=tamil%20hits')
+        fetch('https://saavn.dev/api/search/songs?query=popular')
       ]);
       
       const trendingData = await trendingResponse.json();
-      const popularData = await popularResponse.json();
-      const tamilData = await tamilResponse.json();
+      const rotationData = await rotationResponse.json();
       
-      // Extract results from API responses
-      const trendingTracks = trendingData.data?.results || [];
-      const popularTracks = popularData.data?.results || [];
-      const tamilTracks = tamilData.data?.results || [];
+      const trendingTracks = trendingData.data.results || [];
+      const heavyRotation = rotationData.data.results || [];
       
-      // Combine all tracks and ensure we have enough songs
-      const allTracks = [...trendingTracks, ...popularTracks, ...tamilTracks];
+      setMadeForYou(trendingTracks.slice(0, 6));
+      setViralSongs(heavyRotation.slice(0, 6));
+      setTopCharts([...trendingTracks.slice(6, 9), ...heavyRotation.slice(6, 9)]);
       
-      if (allTracks.length > 0) {
-        // Set categories with real API data
-        setMadeForYou(allTracks.slice(0, 6));
-        setViralSongs(allTracks.slice(6, 12));
-        setTopCharts(allTracks.slice(12, 18));
-        
-        console.log(`✅ Real API data loaded: Made For You (${allTracks.slice(0, 6).length}), Viral Songs (${allTracks.slice(6, 12).length}), Top Charts (${allTracks.slice(12, 18).length})`);
-      } else {
-        console.log('⚠️ No API data available, using fallback Tamil songs');
-        
-        // Fallback to Tamil songs if API fails
-        const tamilSongs = [
-          {
-            id: 'tamil_1',
-            name: 'Kaattu Payale',
-            artists: { primary: [{ name: 'Sid Sriram' }] },
-            image: [
-              { quality: '500x500', url: 'https://c.saavncdn.com/452/Soorarai-Pottru-Tamil-2020-20201113181509-500x500.jpg' },
-              { quality: '150x150', url: 'https://c.saavncdn.com/452/Soorarai-Pottru-Tamil-2020-20201113181509-150x150.jpg' }
-            ],
-            downloadUrl: [{ quality: '320kbps', url: 'https://aac.saavncdn.com/452/3c8b626c2b21c4cfae92dfd83cf8be5d_320.mp4' }],
-            duration: 214
-          },
-          {
-            id: 'tamil_2',
-            name: 'Vaathi Coming',
-            artists: { primary: [{ name: 'Anirudh Ravichander' }] },
-            image: [
-              { quality: '500x500', url: 'https://c.saavncdn.com/191/Master-Tamil-2021-20210113161616-500x500.jpg' },
-              { quality: '150x150', url: 'https://c.saavncdn.com/191/Master-Tamil-2021-20210113161616-150x150.jpg' }
-            ],
-            downloadUrl: [{ quality: '320kbps', url: 'https://aac.saavncdn.com/191/f4b5c3ed52e68a7e4dd5d8b04b0b7c2e_320.mp4' }],
-            duration: 198
-          },
-          {
-            id: 'tamil_3',
-            name: 'Rowdy Baby',
-            artists: { primary: [{ name: 'Dhanush' }, { name: 'Dhee' }] },
-            image: [
-              { quality: '500x500', url: 'https://c.saavncdn.com/070/Maari-2-Tamil-2018-20181206180505-500x500.jpg' },
-              { quality: '150x150', url: 'https://c.saavncdn.com/070/Maari-2-Tamil-2018-20181206180505-150x150.jpg' }
-            ],
-            downloadUrl: [{ quality: '320kbps', url: 'https://aac.saavncdn.com/070/b9c9c5d59b8055b99bf0c4e1a8e4b0b5_320.mp4' }],
-            duration: 251
-          },
-          {
-            id: 'tamil_4',
-            name: 'Arabic Kuthu',
-            artists: { primary: [{ name: 'Anirudh Ravichander' }] },
-            image: [
-              { quality: '500x500', url: 'https://c.saavncdn.com/165/Beast-Tamil-2022-20220413084826-500x500.jpg' },
-              { quality: '150x150', url: 'https://c.saavncdn.com/165/Beast-Tamil-2022-20220413084826-150x150.jpg' }
-            ],
-            downloadUrl: [{ quality: '320kbps', url: 'https://aac.saavncdn.com/165/e5b5c3ed52e68a7e4dd5d8b04b0b7c2e_320.mp4' }],
-            duration: 189
-          },
-          {
-            id: 'tamil_5',
-            name: 'Thalli Pogathey',
-            artists: { primary: [{ name: 'A.R. Rahman' }] },
-            image: [
-              { quality: '500x500', url: 'https://c.saavncdn.com/522/Achcham-Yenbadhu-Madamaiyada-Tamil-2016-500x500.jpg' },
-              { quality: '150x150', url: 'https://c.saavncdn.com/522/Achcham-Yenbadhu-Madamaiyada-Tamil-2016-150x150.jpg' }
-            ],
-            downloadUrl: [{ quality: '320kbps', url: 'https://aac.saavncdn.com/522/a1b5c3ed52e68a7e4dd5d8b04b0b7c2e_320.mp4' }],
-            duration: 334
-          },
-          {
-            id: 'tamil_6',
-            name: 'Beast Mode',
-            artists: { primary: [{ name: 'Anirudh Ravichander' }] },
-            image: [
-              { quality: '500x500', url: 'https://c.saavncdn.com/165/Beast-Tamil-2022-20220413084826-500x500.jpg' },
-              { quality: '150x150', url: 'https://c.saavncdn.com/165/Beast-Tamil-2022-20220413084826-150x150.jpg' }
-            ],
-            downloadUrl: [{ quality: '320kbps', url: 'https://aac.saavncdn.com/165/b2b5c3ed52e68a7e4dd5d8b04b0b7c2e_320.mp4' }],
-            duration: 156
-          }
-        ];
-        
-        setMadeForYou(tamilSongs.slice(0, 6));
-        setViralSongs(tamilSongs.slice(0, 6));
-        setTopCharts(tamilSongs.slice(0, 6));
-      }
+      console.log('✅ Home categories loaded successfully');
     } catch (error) {
-      console.error('❌ Failed to load home categories:', error);
+      console.error('Failed to load home categories:', error);
     }
   };
 
