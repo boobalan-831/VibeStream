@@ -115,6 +115,9 @@ const EnhancedMusicApp: React.FC = () => {
   const [searchResults, setSearchResults] = useState<AppTrack[]>([]);
   const [trendingSongs, setTrendingSongs] = useState<AppTrack[]>([]);
   const [isLoading, setIsLoading] = useState(false);
+  const [isSearching, setIsSearching] = useState(false);
+  const [searchSuggestions, setSearchSuggestions] = useState<string[]>([]);
+  const [showSuggestions, setShowSuggestions] = useState(false);
   const [volume, setVolume] = useState([80]);
   const [progress, setProgress] = useState([0]);
   const [duration, setDuration] = useState(0);
@@ -126,11 +129,17 @@ const EnhancedMusicApp: React.FC = () => {
   const [repeatMode, setRepeatMode] = useState(0); // 0: off, 1: all, 2: one
   const [isShuffled, setIsShuffled] = useState(false);
   
+  // Categories for home page
+  const [madeForYou, setMadeForYou] = useState<AppTrack[]>([]);
+  const [viralSongs, setViralSongs] = useState<AppTrack[]>([]);
+  const [topCharts, setTopCharts] = useState<AppTrack[]>([]);
+  
   const audioRef = useRef<HTMLAudioElement>(null);
 
   // Load trending songs on component mount
   useEffect(() => {
     loadTrendingSongs();
+    loadHomeCategories();
   }, []);
 
   // Load trending songs using enhanced service
@@ -149,14 +158,133 @@ const EnhancedMusicApp: React.FC = () => {
     }
   };
 
-  // Search songs using enhanced service
+  // Load home page categories
+  const loadHomeCategories = async () => {
+    try {
+      console.log('🏠 Loading home categories with real API...');
+      
+      // Use multiple API calls to get variety of songs
+      const [trendingResponse, popularResponse, tamilResponse] = await Promise.all([
+        fetch('https://saavn.dev/api/search/songs?query=trending'),
+        fetch('https://saavn.dev/api/search/songs?query=popular'),
+        fetch('https://saavn.dev/api/search/songs?query=tamil%20hits')
+      ]);
+      
+      const trendingData = await trendingResponse.json();
+      const popularData = await popularResponse.json();
+      const tamilData = await tamilResponse.json();
+      
+      // Extract results from API responses
+      const trendingTracks = trendingData.data?.results || [];
+      const popularTracks = popularData.data?.results || [];
+      const tamilTracks = tamilData.data?.results || [];
+      
+      // Combine all tracks and ensure we have enough songs
+      const allTracks = [...trendingTracks, ...popularTracks, ...tamilTracks];
+      
+      if (allTracks.length > 0) {
+        // Set categories with real API data
+        setMadeForYou(allTracks.slice(0, 6));
+        setViralSongs(allTracks.slice(6, 12));
+        setTopCharts(allTracks.slice(12, 18));
+        
+        console.log(`✅ Real API data loaded: Made For You (${allTracks.slice(0, 6).length}), Viral Songs (${allTracks.slice(6, 12).length}), Top Charts (${allTracks.slice(12, 18).length})`);
+      } else {
+        console.log('⚠️ No API data available, using fallback Tamil songs');
+        
+        // Fallback to Tamil songs if API fails
+        const tamilSongs = [
+          {
+            id: 'tamil_1',
+            name: 'Kaattu Payale',
+            artists: { primary: [{ name: 'Sid Sriram' }] },
+            image: [
+              { quality: '500x500', url: 'https://c.saavncdn.com/452/Soorarai-Pottru-Tamil-2020-20201113181509-500x500.jpg' },
+              { quality: '150x150', url: 'https://c.saavncdn.com/452/Soorarai-Pottru-Tamil-2020-20201113181509-150x150.jpg' }
+            ],
+            downloadUrl: [{ quality: '320kbps', url: 'https://aac.saavncdn.com/452/3c8b626c2b21c4cfae92dfd83cf8be5d_320.mp4' }],
+            duration: 214
+          },
+          {
+            id: 'tamil_2',
+            name: 'Vaathi Coming',
+            artists: { primary: [{ name: 'Anirudh Ravichander' }] },
+            image: [
+              { quality: '500x500', url: 'https://c.saavncdn.com/191/Master-Tamil-2021-20210113161616-500x500.jpg' },
+              { quality: '150x150', url: 'https://c.saavncdn.com/191/Master-Tamil-2021-20210113161616-150x150.jpg' }
+            ],
+            downloadUrl: [{ quality: '320kbps', url: 'https://aac.saavncdn.com/191/f4b5c3ed52e68a7e4dd5d8b04b0b7c2e_320.mp4' }],
+            duration: 198
+          },
+          {
+            id: 'tamil_3',
+            name: 'Rowdy Baby',
+            artists: { primary: [{ name: 'Dhanush' }, { name: 'Dhee' }] },
+            image: [
+              { quality: '500x500', url: 'https://c.saavncdn.com/070/Maari-2-Tamil-2018-20181206180505-500x500.jpg' },
+              { quality: '150x150', url: 'https://c.saavncdn.com/070/Maari-2-Tamil-2018-20181206180505-150x150.jpg' }
+            ],
+            downloadUrl: [{ quality: '320kbps', url: 'https://aac.saavncdn.com/070/b9c9c5d59b8055b99bf0c4e1a8e4b0b5_320.mp4' }],
+            duration: 251
+          },
+          {
+            id: 'tamil_4',
+            name: 'Arabic Kuthu',
+            artists: { primary: [{ name: 'Anirudh Ravichander' }] },
+            image: [
+              { quality: '500x500', url: 'https://c.saavncdn.com/165/Beast-Tamil-2022-20220413084826-500x500.jpg' },
+              { quality: '150x150', url: 'https://c.saavncdn.com/165/Beast-Tamil-2022-20220413084826-150x150.jpg' }
+            ],
+            downloadUrl: [{ quality: '320kbps', url: 'https://aac.saavncdn.com/165/e5b5c3ed52e68a7e4dd5d8b04b0b7c2e_320.mp4' }],
+            duration: 189
+          },
+          {
+            id: 'tamil_5',
+            name: 'Thalli Pogathey',
+            artists: { primary: [{ name: 'A.R. Rahman' }] },
+            image: [
+              { quality: '500x500', url: 'https://c.saavncdn.com/522/Achcham-Yenbadhu-Madamaiyada-Tamil-2016-500x500.jpg' },
+              { quality: '150x150', url: 'https://c.saavncdn.com/522/Achcham-Yenbadhu-Madamaiyada-Tamil-2016-150x150.jpg' }
+            ],
+            downloadUrl: [{ quality: '320kbps', url: 'https://aac.saavncdn.com/522/a1b5c3ed52e68a7e4dd5d8b04b0b7c2e_320.mp4' }],
+            duration: 334
+          },
+          {
+            id: 'tamil_6',
+            name: 'Beast Mode',
+            artists: { primary: [{ name: 'Anirudh Ravichander' }] },
+            image: [
+              { quality: '500x500', url: 'https://c.saavncdn.com/165/Beast-Tamil-2022-20220413084826-500x500.jpg' },
+              { quality: '150x150', url: 'https://c.saavncdn.com/165/Beast-Tamil-2022-20220413084826-150x150.jpg' }
+            ],
+            downloadUrl: [{ quality: '320kbps', url: 'https://aac.saavncdn.com/165/b2b5c3ed52e68a7e4dd5d8b04b0b7c2e_320.mp4' }],
+            duration: 156
+          }
+        ];
+        
+        setMadeForYou(tamilSongs.slice(0, 6));
+        setViralSongs(tamilSongs.slice(0, 6));
+        setTopCharts(tamilSongs.slice(0, 6));
+      }
+    } catch (error) {
+      console.error('❌ Failed to load home categories:', error);
+    }
+  };
+
+  // Search songs using enhanced service with animation
   const searchSongs = async (query: string) => {
     if (!query.trim()) return;
     
+    setIsSearching(true);
     setIsLoading(true);
+    setShowSuggestions(false);
+    
     try {
       console.log(`🔍 Searching for: "${query}"`);
       const response = await enhancedMusicService.searchSongs(query);
+      
+      // Add delay for animation effect
+      await new Promise(resolve => setTimeout(resolve, 800));
       
       if (response.success && response.data.results.length > 0) {
         setSearchResults(response.data.results);
@@ -171,6 +299,26 @@ const EnhancedMusicApp: React.FC = () => {
       setSearchResults([]);
     } finally {
       setIsLoading(false);
+      setIsSearching(false);
+    }
+  };
+
+  // Handle search input with suggestions
+  const handleSearchInput = (value: string) => {
+    setSearchQuery(value);
+    
+    if (value.length > 2) {
+      const suggestions = [
+        `${value} songs`,
+        `${value} remix`,
+        `${value} acoustic`,
+        `${value} live`,
+        `${value} cover`
+      ];
+      setSearchSuggestions(suggestions);
+      setShowSuggestions(true);
+    } else {
+      setShowSuggestions(false);
     }
   };
 
@@ -485,70 +633,184 @@ const EnhancedMusicApp: React.FC = () => {
       default: // home
         return (
           <div className="space-y-8">
-            {/* Trending Section */}
-            <section>
-              <div className="flex items-center justify-between mb-6">
-                <h2 className="text-3xl font-bold text-white">Trending Now</h2>
-                <Button 
-                  variant="ghost" 
-                  onClick={() => setCurrentView('trending')}
-                  className="text-gray-400 hover:text-white"
-                >
-                  Show all
-                </Button>
-              </div>
-              <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-6">
-                {trendingSongs.slice(0, 10).map((track) => (
-                  <Card 
-                    key={track.id}
-                    className="p-4 hover:bg-gray-750 transition-all duration-200 cursor-pointer group"
-                    onClick={() => playTrack(track)}
-                  >
-                    <div className="space-y-3">
-                      <div className="relative aspect-square overflow-hidden rounded-lg">
-                        <img
-                          src={getImageUrl(track)}
-                          alt={track.name}
-                          className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-200"
-                        />
-                        <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
-                          <Button 
-                            variant="green" 
-                            size="sm"
-                            className="rounded-full w-12 h-12"
-                          >
-                            <Play className="w-5 h-5" />
-                          </Button>
-                        </div>
-                      </div>
-                      <div>
-                        <h3 className="font-semibold text-white truncate">{track.name}</h3>
-                        <p className="text-gray-400 text-sm truncate">
-                          {track.artists.primary.map(artist => artist.name).join(', ')}
-                        </p>
-                      </div>
-                    </div>
-                  </Card>
-                ))}
-              </div>
+            {/* Welcome Header */}
+            <section className="bg-gradient-to-r from-green-600/20 to-blue-600/20 rounded-xl p-6 border border-gray-700">
+              <h1 className="text-4xl font-bold text-white mb-2">Good {new Date().getHours() < 12 ? 'Morning' : new Date().getHours() < 17 ? 'Afternoon' : 'Evening'}</h1>
+              <p className="text-gray-300">Discover your new favorite music</p>
             </section>
 
-            {/* Recently Played (if available) */}
-            {state.library.recentlyPlayed.length > 0 && (
+            {/* Loading State */}
+            {madeForYou.length === 0 && viralSongs.length === 0 && topCharts.length === 0 && (
               <section>
-                <h2 className="text-2xl font-bold text-white mb-6">Recently Played</h2>
-                <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-6">
-                  {state.library.recentlyPlayed.slice(0, 5).map((song, idx) => (
+                <div className="flex items-center justify-center py-12">
+                  <div className="text-center">
+                    <div className="animate-spin rounded-full h-12 w-12 border-4 border-green-400 border-t-transparent mx-auto mb-4"></div>
+                    <h3 className="text-xl font-semibold text-white mb-2">Loading amazing music...</h3>
+                    <p className="text-gray-400">We're fetching the best tracks for you</p>
+                  </div>
+                </div>
+              </section>
+            )}
+
+            {/* Made For You */}
+            {madeForYou.length > 0 && (
+              <section>
+                <div className="flex items-center justify-between mb-6">
+                  <h2 className="text-2xl font-bold text-white">🎵 Made For You</h2>
+                  <Button 
+                    variant="ghost" 
+                    className="text-gray-400 hover:text-white"
+                  >
+                    Show all
+                  </Button>
+                </div>
+                <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
+                  {madeForYou.map((track) => (
                     <Card 
-                      key={`${song.id}-${idx}`}
-                      className="p-4 hover:bg-gray-750 transition-all duration-200 cursor-pointer group"
-                      onClick={() => actions.playTrack(song)}
+                      key={track.id}
+                      className="p-3 hover:bg-gray-750 transition-all duration-300 cursor-pointer group bg-gradient-to-b from-gray-800/50 to-gray-900/80 border border-gray-700/50"
+                      onClick={() => playTrack(track)}
                     >
                       <div className="space-y-3">
                         <div className="relative aspect-square overflow-hidden rounded-lg">
                           <img
-                            src={song.image}
-                            alt={song.title}
+                            src={getImageUrl(track)}
+                            alt={track.name}
+                            className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
+                          />
+                          <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-all duration-300 flex items-center justify-center">
+                            <div className="bg-green-500 rounded-full p-3 shadow-lg transform scale-0 group-hover:scale-100 transition-transform duration-300">
+                              <Play className="w-4 h-4 text-white" fill="white" />
+                            </div>
+                          </div>
+                        </div>
+                        <div>
+                          <h3 className="font-semibold text-white truncate text-sm">{track.name}</h3>
+                          <p className="text-gray-400 text-xs truncate">
+                            {track.artists.primary.map((artist: any) => artist.name).join(', ')}
+                          </p>
+                        </div>
+                      </div>
+                    </Card>
+                  ))}
+                </div>
+              </section>
+            )}
+
+            {/* Viral Songs */}
+            {viralSongs.length > 0 && (
+              <section>
+                <div className="flex items-center justify-between mb-6">
+                  <h2 className="text-2xl font-bold text-white">🔥 Viral Right Now</h2>
+                  <Button 
+                    variant="ghost" 
+                    className="text-gray-400 hover:text-white"
+                  >
+                    Show all
+                  </Button>
+                </div>
+                <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
+                  {viralSongs.map((track) => (
+                    <Card 
+                      key={track.id}
+                      className="p-3 hover:bg-gray-750 transition-all duration-300 cursor-pointer group bg-gradient-to-b from-red-900/20 to-gray-900/80 border border-red-700/30"
+                      onClick={() => playTrack(track)}
+                    >
+                      <div className="space-y-3">
+                        <div className="relative aspect-square overflow-hidden rounded-lg">
+                          <img
+                            src={getImageUrl(track)}
+                            alt={track.name}
+                            className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
+                          />
+                          <div className="absolute top-2 right-2">
+                            <span className="bg-red-500 text-white text-xs px-2 py-1 rounded-full font-bold">🔥</span>
+                          </div>
+                          <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-all duration-300 flex items-center justify-center">
+                            <div className="bg-red-500 rounded-full p-3 shadow-lg transform scale-0 group-hover:scale-100 transition-transform duration-300">
+                              <Play className="w-4 h-4 text-white" fill="white" />
+                            </div>
+                          </div>
+                        </div>
+                        <div>
+                          <h3 className="font-semibold text-white truncate text-sm">{track.name}</h3>
+                          <p className="text-gray-400 text-xs truncate">
+                            {track.artists.primary.map((artist: any) => artist.name).join(', ')}
+                          </p>
+                        </div>
+                      </div>
+                    </Card>
+                  ))}
+                </div>
+              </section>
+            )}
+
+            {/* Top Charts */}
+            {topCharts.length > 0 && (
+              <section>
+                <div className="flex items-center justify-between mb-6">
+                  <h2 className="text-2xl font-bold text-white">📈 Top Charts</h2>
+                  <Button 
+                    variant="ghost" 
+                    className="text-gray-400 hover:text-white"
+                  >
+                    Show all
+                  </Button>
+                </div>
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                  {topCharts.map((track, index) => (
+                    <Card 
+                      key={track.id}
+                      className="p-4 hover:bg-gray-750 transition-all duration-300 cursor-pointer group bg-gradient-to-r from-yellow-900/20 to-gray-900/80 border border-yellow-700/30"
+                      onClick={() => playTrack(track)}
+                    >
+                      <div className="flex items-center space-x-4">
+                        <div className="relative">
+                          <span className="text-3xl font-bold text-yellow-400">#{index + 1}</span>
+                        </div>
+                        <div className="relative">
+                          <img
+                            src={getImageUrl(track)}
+                            alt={track.name}
+                            className="w-16 h-16 rounded-lg object-cover"
+                          />
+                          <div className="absolute inset-0 bg-black/40 rounded-lg opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
+                            <Play className="w-5 h-5 text-white" />
+                          </div>
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <h3 className="font-semibold text-white truncate">{track.name}</h3>
+                          <p className="text-gray-400 truncate text-sm">
+                            {track.artists.primary.map((artist: any) => artist.name).join(', ')}
+                          </p>
+                          <p className="text-gray-500 text-xs">{enhancedMusicService.formatDuration(track.duration)}</p>
+                        </div>
+                        <div className="opacity-0 group-hover:opacity-100 transition-opacity">
+                          <span className="text-yellow-400 font-medium text-sm">▶ Play</span>
+                        </div>
+                      </div>
+                    </Card>
+                  ))}
+                </div>
+              </section>
+            )}
+
+            {/* Recently Played (if available) */}
+            {queue.length > 0 && currentTrack && (
+              <section>
+                <h2 className="text-2xl font-bold text-white mb-6">🕒 Recently Played</h2>
+                <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-6">
+                  {queue.slice(0, 5).map((track: AppTrack, idx: number) => (
+                    <Card 
+                      key={`${track.id}-${idx}`}
+                      className="p-4 hover:bg-gray-750 transition-all duration-200 cursor-pointer group"
+                      onClick={() => playTrack(track)}
+                    >
+                      <div className="space-y-3">
+                        <div className="relative aspect-square overflow-hidden rounded-lg">
+                          <img
+                            src={getImageUrl(track)}
+                            alt={track.name}
                             className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-200"
                           />
                           <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
@@ -562,8 +824,10 @@ const EnhancedMusicApp: React.FC = () => {
                           </div>
                         </div>
                         <div>
-                          <h3 className="font-semibold text-white truncate">{song.title}</h3>
-                          <p className="text-gray-400 text-sm truncate">{song.artist}</p>
+                          <h3 className="font-semibold text-white truncate">{track.name}</h3>
+                          <p className="text-gray-400 text-sm truncate">
+                            {track.artists.primary.map((artist: any) => artist.name).join(', ')}
+                          </p>
                         </div>
                       </div>
                     </Card>
@@ -581,23 +845,56 @@ const EnhancedMusicApp: React.FC = () => {
       <audio ref={audioRef} crossOrigin="anonymous" />
       
       {/* Top Header */}
-      <header className="bg-gray-900 border-b border-gray-700 p-4">
+      <header className="bg-gray-900 border-b border-gray-700 p-4 relative">
         <div className="flex items-center justify-between">
           <div className="flex items-center space-x-4">
             <h1 className="text-2xl font-bold text-green-400">🎵 VibeStream</h1>
           </div>
           
-          {/* Search Bar */}
+          {/* Enhanced Search Bar */}
           <div className="flex-1 max-w-md mx-8">
             <div className="relative">
-              <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 w-5 h-5" />
+              <Search className={`absolute left-3 top-1/2 transform -translate-y-1/2 w-5 h-5 transition-all duration-300 ${
+                isSearching ? 'text-green-400 animate-pulse' : 'text-gray-400'
+              }`} />
               <Input
                 placeholder="Search for songs, artists, albums..."
                 value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
+                onChange={(e) => handleSearchInput(e.target.value)}
                 onKeyPress={(e) => e.key === 'Enter' && searchSongs(searchQuery)}
-                className="pl-10 w-full"
+                onFocus={() => searchQuery.length > 2 && setShowSuggestions(true)}
+                onBlur={() => setTimeout(() => setShowSuggestions(false), 200)}
+                className={`pl-10 w-full transition-all duration-300 ${
+                  isSearching ? 'ring-2 ring-green-400/50' : ''
+                }`}
               />
+              
+              {/* Search Loading Animation */}
+              {isSearching && (
+                <div className="absolute right-3 top-1/2 transform -translate-y-1/2">
+                  <div className="animate-spin rounded-full h-4 w-4 border-2 border-green-400 border-t-transparent"></div>
+                </div>
+              )}
+              
+              {/* Search Suggestions */}
+              {showSuggestions && searchSuggestions.length > 0 && (
+                <div className="absolute top-full left-0 right-0 mt-2 bg-gray-800 border border-gray-600 rounded-lg shadow-lg z-50 max-h-48 overflow-y-auto">
+                  {searchSuggestions.map((suggestion, index) => (
+                    <button
+                      key={index}
+                      onClick={() => {
+                        setSearchQuery(suggestion);
+                        setShowSuggestions(false);
+                        searchSongs(suggestion);
+                      }}
+                      className="w-full px-4 py-3 text-left hover:bg-gray-700 transition-colors duration-200 first:rounded-t-lg last:rounded-b-lg flex items-center space-x-3"
+                    >
+                      <Search className="w-4 h-4 text-gray-400" />
+                      <span className="text-white">{suggestion}</span>
+                    </button>
+                  ))}
+                </div>
+              )}
             </div>
           </div>
           
@@ -658,61 +955,71 @@ const EnhancedMusicApp: React.FC = () => {
         </main>
       </div>
 
-      {/* Bottom Player */}
+      {/* Enhanced Bottom Player */}
       {currentTrack && (
-        <div className="bg-gray-800 border-t border-gray-700 p-4">
+        <div className="bg-gradient-to-r from-gray-800 via-gray-850 to-gray-800 border-t border-gray-600 p-4 shadow-2xl">
           <div className="flex items-center justify-between">
             {/* Currently Playing */}
             <div className="flex items-center space-x-4 flex-1 min-w-0" style={{ flexBasis: '30%' }}>
-              <img
-                src={getImageUrl(currentTrack)}
-                alt={currentTrack.name}
-                className="w-14 h-14 rounded-lg object-cover"
-              />
+              <div className="relative group">
+                <img
+                  src={getImageUrl(currentTrack)}
+                  alt={currentTrack.name}
+                  className="w-16 h-16 rounded-lg object-cover shadow-lg ring-2 ring-gray-700 group-hover:ring-green-500 transition-all duration-300"
+                />
+                <div className="absolute inset-0 bg-black/20 rounded-lg opacity-0 group-hover:opacity-100 transition-opacity"></div>
+              </div>
               <div className="min-w-0">
-                <h4 className="font-semibold text-white truncate">{currentTrack.name}</h4>
-                <p className="text-gray-400 text-sm truncate">
-                  {currentTrack.artists.primary.map(artist => artist.name).join(', ')}
+                <h4 className="font-semibold text-white truncate text-lg">{currentTrack.name}</h4>
+                <p className="text-gray-300 text-sm truncate">
+                  {currentTrack.artists.primary.map((artist: any) => artist.name).join(', ')}
                 </p>
               </div>
-              <Button variant="ghost" size="sm" className="text-gray-400 hover:text-green-400">
-                <Heart className="w-4 h-4" />
+              <Button 
+                variant="ghost" 
+                size="sm" 
+                className="text-gray-400 hover:text-red-400 hover:scale-110 transition-all duration-200"
+              >
+                <Heart className="w-5 h-5" />
               </Button>
             </div>
 
-            {/* Player Controls */}
-            <div className="flex flex-col items-center space-y-2" style={{ flexBasis: '40%' }}>
-              <div className="flex items-center space-x-4">
+            {/* Enhanced Player Controls */}
+            <div className="flex flex-col items-center space-y-3" style={{ flexBasis: '40%' }}>
+              <div className="flex items-center space-x-6">
                 <Button 
                   variant="ghost" 
                   size="sm"
                   onClick={() => setIsShuffled(!isShuffled)}
-                  className={isShuffled ? 'text-green-400' : 'text-gray-400'}
+                  className={`${isShuffled ? 'text-green-400 bg-green-400/20' : 'text-gray-300'} hover:scale-110 transition-all duration-200 p-3 rounded-full`}
+                  title="Shuffle"
                 >
-                  <Shuffle className="w-4 h-4" />
+                  <Shuffle className="w-5 h-5" />
                 </Button>
                 
                 <Button 
                   variant="ghost" 
                   size="sm"
                   onClick={skipPrevious}
-                  className="text-gray-400 hover:text-white"
+                  className="text-gray-300 hover:text-white hover:scale-110 transition-all duration-200 p-3 rounded-full"
+                  title="Previous"
                 >
-                  <SkipBack className="w-5 h-5" />
+                  <SkipBack className="w-6 h-6" />
                 </Button>
                 
                 <Button
                   onClick={togglePlayPause}
                   variant="green"
-                  className="w-10 h-10 rounded-full"
+                  className="w-14 h-14 rounded-full shadow-lg hover:shadow-green-500/25 hover:scale-105 transition-all duration-200 ring-2 ring-green-500/30"
                   disabled={isLoading}
+                  title={isPlaying ? "Pause" : "Play"}
                 >
                   {isLoading ? (
-                    <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+                    <div className="w-6 h-6 border-3 border-white border-t-transparent rounded-full animate-spin"></div>
                   ) : isPlaying ? (
-                    <Pause className="w-5 h-5" />
+                    <Pause className="w-6 h-6" fill="white" />
                   ) : (
-                    <Play className="w-5 h-5" />
+                    <Play className="w-6 h-6" fill="white" />
                   )}
                 </Button>
                 
@@ -720,46 +1027,64 @@ const EnhancedMusicApp: React.FC = () => {
                   variant="ghost" 
                   size="sm"
                   onClick={skipNext}
-                  className="text-gray-400 hover:text-white"
+                  className="text-gray-300 hover:text-white hover:scale-110 transition-all duration-200 p-3 rounded-full"
+                  title="Next"
                 >
-                  <SkipForward className="w-5 h-5" />
+                  <SkipForward className="w-6 h-6" />
                 </Button>
                 
                 <Button 
                   variant="ghost" 
                   size="sm"
                   onClick={() => setRepeatMode((prev) => (prev + 1) % 3)}
-                  className={repeatMode > 0 ? 'text-green-400' : 'text-gray-400'}
+                  className={`${repeatMode > 0 ? 'text-green-400 bg-green-400/20' : 'text-gray-300'} hover:scale-110 transition-all duration-200 p-3 rounded-full relative`}
+                  title={`Repeat ${repeatMode === 0 ? 'Off' : repeatMode === 1 ? 'All' : 'One'}`}
                 >
-                  <Repeat className="w-4 h-4" />
-                  {repeatMode === 2 && <span className="text-xs ml-1">1</span>}
+                  <Repeat className="w-5 h-5" />
+                  {repeatMode === 2 && (
+                    <span className="absolute -top-1 -right-1 bg-green-400 text-gray-900 text-xs w-4 h-4 rounded-full flex items-center justify-center font-bold">1</span>
+                  )}
                 </Button>
               </div>
               
-              <div className="w-full flex items-center space-x-2">
-                <span className="text-xs text-gray-400 w-10 text-right">{formatTime(currentTime)}</span>
-                <Slider
-                  value={progress}
-                  onValueChange={handleProgressChange}
-                  max={100}
-                  step={0.1}
-                  className="flex-1"
-                />
-                <span className="text-xs text-gray-400 w-10">{formatTime(duration)}</span>
+              <div className="w-full flex items-center space-x-4">
+                <span className="text-sm text-gray-300 w-12 text-right font-mono">{formatTime(currentTime)}</span>
+                <div className="flex-1 group">
+                  <Slider
+                    value={progress}
+                    onValueChange={handleProgressChange}
+                    max={100}
+                    step={0.1}
+                    className="flex-1"
+                  />
+                </div>
+                <span className="text-sm text-gray-300 w-12 font-mono">{formatTime(duration)}</span>
               </div>
             </div>
 
-            {/* Volume & Options */}
-            <div className="flex items-center space-x-3 justify-end" style={{ flexBasis: '30%' }}>
-              <div className="flex items-center space-x-2">
-                <Volume2 className="w-4 h-4 text-gray-400" />
-                <Slider
-                  value={volume}
-                  onValueChange={handleVolumeChange}
-                  max={100}
-                  step={1}
-                  className="w-24"
-                />
+            {/* Enhanced Volume & Options */}
+            <div className="flex items-center space-x-4 justify-end" style={{ flexBasis: '30%' }}>
+              <Button 
+                variant="ghost" 
+                size="sm"
+                className="text-gray-400 hover:text-white hover:scale-110 transition-all duration-200"
+                title="Queue"
+              >
+                <List className="w-5 h-5" />
+              </Button>
+              
+              <div className="flex items-center space-x-3">
+                <Volume2 className="w-5 h-5 text-gray-300" />
+                <div className="w-28 group">
+                  <Slider
+                    value={volume}
+                    onValueChange={handleVolumeChange}
+                    max={100}
+                    step={1}
+                    className="w-full"
+                  />
+                </div>
+                <span className="text-xs text-gray-400 w-8 text-center">{volume[0]}</span>
               </div>
             </div>
           </div>
