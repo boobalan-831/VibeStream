@@ -971,12 +971,61 @@ const EnhancedMusicApp: React.FC = () => {
     <div className="h-screen bg-gray-900 text-white flex flex-col">
       <audio ref={audioRef} crossOrigin="anonymous" />
       {/* Header */}
-      <header className="bg-gray-900 border-b border-gray-700 p-4 relative">
-        <div className="flex items-center justify-between">
+      <header className="bg-gray-900 border-b border-gray-800/70 md:border-gray-700 md:p-4 px-4 pt-3 pb-2 relative sticky top-0 z-50 backdrop-blur-md">
+        {/* Mobile Header */}
+        <div className="md:hidden space-y-3">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center space-x-2">
+              <div className="w-8 h-8 rounded-xl bg-gradient-to-br from-green-500 to-emerald-600 flex items-center justify-center shadow-inner ring-1 ring-green-400/30">
+                <span className="text-white text-base">🎵</span>
+              </div>
+              <h1 className="text-xl font-extrabold tracking-tight bg-gradient-to-r from-green-400 to-emerald-300 bg-clip-text text-transparent">VibeStream</h1>
+            </div>
+            <div className="flex items-center space-x-2">
+              <Button variant="ghost" size="sm" onClick={() => setCurrentView('search')} className={`p-2 h-9 w-9 ${currentView==='search'?'text-green-400':'text-gray-300'} hover:text-white hover:bg-gray-800 rounded-lg`} title="Search">
+                <Search className="w-5 h-5" />
+              </Button>
+              <Button variant="green" size="sm" className="h-9 px-3 text-sm font-semibold shadow-lg shadow-green-500/20">Log In</Button>
+            </div>
+          </div>
+          {/* Mobile Search Bar */}
+          <div className="relative">
+            <Search className={`absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 transition-all duration-300 ${isSearching ? 'text-green-400 animate-pulse' : 'text-gray-400'}`} />
+            <Input
+              placeholder="Search songs, artists..."
+              value={searchQuery}
+              onChange={(e) => handleSearchInput(e.target.value)}
+              onKeyPress={(e) => e.key === 'Enter' && performSearch(searchQuery)}
+              onFocus={() => searchQuery.length > 2 && setShowSuggestions(true)}
+              onBlur={() => setTimeout(() => setShowSuggestions(false), 150)}
+              className={`pl-11 w-full pr-10 h-11 rounded-xl bg-gray-800/70 border-gray-700/60 focus:ring-green-500/60 focus:bg-gray-800 transition-all ${isSearching ? 'ring-2 ring-green-400/40' : ''}`}
+            />
+            {isSearching && (
+              <div className="absolute right-3 top-1/2 -translate-y-1/2">
+                <div className="animate-spin rounded-full h-4 w-4 border-2 border-green-400 border-t-transparent" />
+              </div>
+            )}
+            {showSuggestions && searchSuggestions.length > 0 && (
+              <div className="absolute top-full left-0 right-0 mt-2 bg-gray-850/95 backdrop-blur-xl border border-gray-700 rounded-xl shadow-2xl z-50 max-h-60 overflow-y-auto divide-y divide-gray-800">
+                {searchSuggestions.map((suggestion, i) => (
+                  <button
+                    key={i}
+                    onClick={() => { setSearchQuery(suggestion); setShowSuggestions(false); performSearch(suggestion); }}
+                    className="w-full px-4 py-3 text-left hover:bg-gray-800/70 transition-colors duration-150 flex items-center space-x-3 group"
+                  >
+                    <Search className="w-4 h-4 text-gray-500 group-hover:text-green-400" />
+                    <span className="text-sm text-gray-200 group-hover:text-white">{suggestion}</span>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+        {/* Desktop Header (unchanged) */}
+        <div className="hidden md:flex items-center justify-between">
           <div className="flex items-center space-x-4">
             <h1 className="text-2xl font-bold text-green-400">🎵 VibeStream</h1>
           </div>
-          {/* Search */}
           <div className="flex-1 max-w-md mx-8">
             <div className="relative">
               <Search className={`absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 transition-all duration-300 ${isSearching ? 'text-green-400 animate-pulse' : 'text-gray-400'}`} />
@@ -997,23 +1046,16 @@ const EnhancedMusicApp: React.FC = () => {
               {showSuggestions && searchSuggestions.length > 0 && (
                 <div className="absolute top-full left-0 right-0 mt-2 bg-gray-800 border border-gray-600 rounded-lg shadow-lg z-50 max-h-48 overflow-y-auto">
                   {searchSuggestions.map((suggestion, i) => {
-                    const Icon = Search;
-                    return (
-                      <button
-                        key={i}
-                        onClick={() => { setSearchQuery(suggestion); setShowSuggestions(false); performSearch(suggestion); }}
-                        className="w-full px-4 py-3 text-left hover:bg-gray-700 transition-colors duration-200 first:rounded-t-lg last:rounded-b-lg flex items-center space-x-3"
-                      >
+                    const Icon = Search; return (
+                      <button key={i} onClick={() => { setSearchQuery(suggestion); setShowSuggestions(false); performSearch(suggestion); }} className="w-full px-4 py-3 text-left hover:bg-gray-700 transition-colors duration-200 first:rounded-t-lg last:rounded-b-lg flex items-center space-x-3">
                         <Icon className="w-4 h-4 text-gray-400" />
                         <span className="text-white">{suggestion}</span>
                       </button>
-                    );
-                  })}
+                    );})}
                 </div>
               )}
             </div>
           </div>
-          {/* Auth Buttons */}
           <div className="flex items-center space-x-4">
             <Button variant="ghost" size="sm">Sign Up</Button>
             <Button variant="green" size="sm">Log In</Button>
