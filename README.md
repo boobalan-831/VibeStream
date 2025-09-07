@@ -2,6 +2,9 @@
 
 VibeStream is a modern, professional music streaming application built with React, TypeScript, and Node.js. It features a beautiful JioSaavn-inspired UI with advanced music player functionality.
 
+## 🌟 Live Demo
+🚀 **[Try VibeStream Live](https://vibestreamplay.vercel.app/)** 🚀
+
 ![VibeStream Screenshot](icons/screenshot.png)
 
 ## ✨ Features
