@@ -100,16 +100,16 @@ class EnhancedMusicService {
     }
   }
 
-  async getTrendingSongs(): Promise<SaavnSearchResponse> {
+  async getHomePageModules(): Promise<SaavnModulesResponse> {
     const cacheKey = this.getCacheKey('modules', { language: 'english,hindi' });
     const cached = this.getFromCache(cacheKey);
     if (cached) {
-      console.log('🔄 Using cached trending songs');
+      console.log('🔄 Using cached home page modules');
       return cached;
     }
 
     try {
-      console.log('🔥 Fetching trending songs...');
+      console.log('🔥 Fetching home page modules...');
       const url = `${this.baseUrl}/modules?language=english,hindi`;
       const response = await fetch(url);
       
@@ -119,24 +119,91 @@ class EnhancedMusicService {
 
       const data: SaavnModulesResponse = await response.json();
       
-      if (data.success && data.data?.trending?.songs && data.data.trending.songs.length > 0) {
-        const trendingSongs = data.data.trending.songs;
-        const result: SaavnSearchResponse = {
-          success: true,
-          data: {
-            results: trendingSongs,
-            total: trendingSongs.length
-          }
-        };
-        console.log(`✅ Loaded ${trendingSongs.length} trending songs`);
-        this.setCache(cacheKey, result);
-        return result;
+      if (data.success) {
+        console.log(`✅ Loaded home page modules`);
+        this.setCache(cacheKey, data);
+        return data;
       } else {
-        console.log('❌ No trending songs found');
+        console.log('❌ No home page modules found');
+        return { success: false, data: {} };
+      }
+    } catch (error) {
+      console.error('❌ Failed to load home page modules:', error);
+      return { success: false, data: {} };
+    }
+  }
+
+  async getMadeForYouSongs(): Promise<SaavnSearchResponse> {
+    try {
+      console.log('🔥 Fetching "Made For You" songs...');
+      const url = `${this.baseUrl}/search/songs?query=relaxing&limit=6`;
+      const response = await fetch(url);
+      
+      if (!response.ok) {
+        throw new Error(`API error: ${response.status} ${response.statusText}`);
+      }
+
+      const data: SaavnSearchResponse = await response.json();
+      
+      if (data.success) {
+        console.log(`✅ Loaded "Made For You" songs`);
+        return data;
+      } else {
+        console.log('❌ No "Made For You" songs found');
         return { success: false, data: { results: [] } };
       }
     } catch (error) {
-      console.error('❌ Failed to load trending songs:', error);
+      console.error('❌ Failed to load "Made For You" songs:', error);
+      return { success: false, data: { results: [] } };
+    }
+  }
+
+  async getViralSongs(): Promise<SaavnSearchResponse> {
+    try {
+      console.log('🔥 Fetching "Viral Right Now" songs...');
+      const url = `${this.baseUrl}/search/songs?query=viral&limit=6`;
+      const response = await fetch(url);
+      
+      if (!response.ok) {
+        throw new Error(`API error: ${response.status} ${response.statusText}`);
+      }
+
+      const data: SaavnSearchResponse = await response.json();
+      
+      if (data.success) {
+        console.log(`✅ Loaded "Viral Right Now" songs`);
+        return data;
+      } else {
+        console.log('❌ No "Viral Right Now" songs found');
+        return { success: false, data: { results: [] } };
+      }
+    } catch (error) {
+      console.error('❌ Failed to load "Viral Right Now" songs:', error);
+      return { success: false, data: { results: [] } };
+    }
+  }
+
+  async getTopChartsSongs(): Promise<SaavnSearchResponse> {
+    try {
+      console.log('🔥 Fetching "Top Charts" songs...');
+      const url = `${this.baseUrl}/search/songs?query=top+hits&limit=3`;
+      const response = await fetch(url);
+      
+      if (!response.ok) {
+        throw new Error(`API error: ${response.status} ${response.statusText}`);
+      }
+
+      const data: SaavnSearchResponse = await response.json();
+      
+      if (data.success) {
+        console.log(`✅ Loaded "Top Charts" songs`);
+        return data;
+      } else {
+        console.log('❌ No "Top Charts" songs found');
+        return { success: false, data: { results: [] } };
+      }
+    } catch (error) {
+      console.error('❌ Failed to load "Top Charts" songs:', error);
       return { success: false, data: { results: [] } };
     }
   }
@@ -211,14 +278,24 @@ class EnhancedMusicService {
 
   // Utility methods
   getImageUrl(track: SaavnTrack, quality: '500x500' | '150x150' | 'high' = 'high'): string {
-    if (quality === 'high') {
-      return track.image.find(img => img.quality === '500x500')?.url || 
-             track.image.find(img => img.quality === '150x150')?.url ||
+    console.log('Getting image URL for track:', track); // Add this line
+    if (typeof track.image === 'string') {
+      return track.image;
+    }
+
+    if (Array.isArray(track.image)) {
+      if (quality === 'high') {
+        return track.image.find(img => img.quality === '500x500')?.url || 
+               track.image.find(img => img.quality === '150x150')?.url ||
+               track.image[0]?.url || '';
+      }
+      
+      return track.image.find(img => img.quality === quality)?.url || 
              track.image[0]?.url || '';
     }
-    
-    return track.image.find(img => img.quality === quality)?.url || 
-           track.image[0]?.url || '';
+
+    console.error('Track image is not a string or an array:', track.image); // Add this line
+    return ''; // or a placeholder image
   }
 
   formatDuration(seconds: number): string {
