@@ -278,7 +278,8 @@ class EnhancedMusicService {
 
   // Utility methods
   getImageUrl(track: SaavnTrack, quality: '500x500' | '150x150' | 'high' = 'high'): string {
-    console.log('Getting image URL for track:', track); // Add this line
+    // Debug logging can be re-enabled if needed
+    // const DEBUG = false; if (DEBUG) console.log('Getting image URL for track:', track);
     if (typeof track.image === 'string') {
       return track.image;
     }
@@ -294,7 +295,7 @@ class EnhancedMusicService {
              track.image[0]?.url || '';
     }
 
-    console.error('Track image is not a string or an array:', track.image); // Add this line
+    // console.error('Track image is not a string or an array:', track.image);
     return ''; // or a placeholder image
   }
 

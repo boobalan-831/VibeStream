@@ -19,8 +19,12 @@ import {
   X
 } from 'lucide-react';
 import { useVibeStream } from '../context/VibeStreamContext';
+import { useAuth } from '../context/AuthContext';
 import { enhancedMusicService, SaavnTrack } from '../services/enhancedMusicService';
 import TopPlaylists from './TopPlaylists';
+// Auth gating is handled in App root; no login/register modals here
+// Resolve logo URL via Vite for bundling & base path safety
+const LOGO_URL = new URL('../../icons/VStream-logo.png', import.meta.url).href;
 
 interface Track {
   id: string;
@@ -36,12 +40,14 @@ interface Track {
 type AppTrack = SaavnTrack;
 
 // UI Components
-const Input: React.FC<React.InputHTMLAttributes<HTMLInputElement> & { className?: string }> = ({ className = "", ...props }) => (
-  <input 
-    {...props} 
-    className={`px-4 py-2 border border-gray-700 rounded-lg bg-gray-800 text-white focus:outline-none focus:ring-2 focus:ring-green-500 focus:border-transparent placeholder-gray-400 ${className}`} 
+const Input = React.forwardRef<HTMLInputElement, React.InputHTMLAttributes<HTMLInputElement> & { className?: string }>(({ className = "", ...props }, ref) => (
+  <input
+    ref={ref}
+    {...props}
+    className={`px-4 py-2 border border-gray-700 rounded-lg bg-gray-800 text-white focus:outline-none focus:ring-2 focus:ring-green-500 focus:border-transparent placeholder-gray-400 ${className}`}
   />
-);
+));
+Input.displayName = 'Input';
 
 const Button: React.FC<React.ButtonHTMLAttributes<HTMLButtonElement> & { 
   variant?: 'default' | 'ghost' | 'green'; 
@@ -112,7 +118,8 @@ const Slider: React.FC<{
 
 const EnhancedMusicApp: React.FC = () => {
   const { state, actions } = useVibeStream();
-  const [currentView, setCurrentView] = useState<'home' | 'search' | 'trending' | 'library' | 'playlists' | 'playlistTracks'>('home');
+  const { user, isGuest, previewLimitSeconds, actions: auth } = useAuth();
+  const [currentView, setCurrentView] = useState<'home' | 'search' | 'trending' | 'library' | 'playlists' | 'playlistTracks' | 'recent' | 'liked' | 'queue'>('home');
   const [playlistTracks, setPlaylistTracks] = useState<AppTrack[]>([]);
   const [playlistName, setPlaylistName] = useState<string>('');
   const [searchQuery, setSearchQuery] = useState('');
@@ -136,7 +143,21 @@ const EnhancedMusicApp: React.FC = () => {
   const [isShuffled, setIsShuffled] = useState(false);
   const [showQueuePanel, setShowQueuePanel] = useState(false);
   const [isFavorite, setIsFavorite] = useState(false);
+  const [likedTracks, setLikedTracks] = useState<AppTrack[]>([]);
+  const [recentlyPlayed, setRecentlyPlayed] = useState<AppTrack[]>([]);
   const [playbackSpeed, setPlaybackSpeed] = useState(1);
+  // User menu state
+  const [showUserMenu, setShowUserMenu] = useState(false);
+  // Prefer user profile image if available, otherwise fallback to app logo (no longer used in header avatar)
+  const profileImageUrl = (user as any)?.user_metadata?.avatar_url || (user as any)?.user_metadata?.picture || null;
+  // Friendly display name (avoid showing email)
+  const displayName = React.useMemo(() => {
+    if (!user) return isGuest ? 'Vibe Guest' : 'Vibe User';
+    const meta: any = (user as any)?.user_metadata || {};
+    return (
+      meta.display_name || meta.full_name || meta.name || meta.given_name || meta.preferred_username || 'Vibe User'
+    );
+  }, [user, isGuest]);
   
   // Categories for home page
   const [madeForYou, setMadeForYou] = useState<AppTrack[]>([]);
@@ -144,12 +165,52 @@ const EnhancedMusicApp: React.FC = () => {
   const [topCharts, setTopCharts] = useState<AppTrack[]>([]);
   
   const audioRef = useRef<HTMLAudioElement>(null);
+  // Header UI refs for click-outside handling
+  const desktopUserMenuRef = useRef<HTMLDivElement | null>(null);
+  const mobileUserMenuRef = useRef<HTMLDivElement | null>(null);
+  const desktopSearchPanelRef = useRef<HTMLDivElement | null>(null);
+  const mobileSearchPanelRef = useRef<HTMLDivElement | null>(null);
+  const desktopSearchInputRef = useRef<HTMLInputElement | null>(null);
+  const mobileSearchInputRef = useRef<HTMLInputElement | null>(null);
 
   // Load trending songs on component mount
   useEffect(() => {
     loadTrendingSongs();
     loadHomeCategories();
+    try {
+      const likedRaw = localStorage.getItem('vibestream_liked');
+      if (likedRaw) { const parsed = JSON.parse(likedRaw); if(Array.isArray(parsed)) setLikedTracks(parsed); }
+      const recentRaw = localStorage.getItem('vibestream_recent');
+      if (recentRaw) { const parsedR = JSON.parse(recentRaw); if(Array.isArray(parsedR)) setRecentlyPlayed(parsedR); }
+    } catch(e) { console.warn('persist load fail', e); }
   }, []);
+
+  // Click-outside to close menus and search suggestions
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      const target = e.target as Node;
+      // User menu: ignore clicks on the trigger button(s)
+      const menuButtonClicked = (target as HTMLElement)?.closest?.('[data-user-menu-button]');
+      const inDesktopMenu = desktopUserMenuRef.current?.contains(target);
+      const inMobileMenu = mobileUserMenuRef.current?.contains(target);
+      if (!menuButtonClicked && !inDesktopMenu && !inMobileMenu && showUserMenu) {
+        setShowUserMenu(false);
+      }
+
+      // Search suggestions: consider both input and panel
+      const inDesktopSearch = desktopSearchPanelRef.current?.contains(target) || desktopSearchInputRef.current?.contains(target);
+      const inMobileSearch = mobileSearchPanelRef.current?.contains(target) || mobileSearchInputRef.current?.contains(target);
+      if (!inDesktopSearch && !inMobileSearch && showSuggestions) {
+        setShowSuggestions(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [showUserMenu, showSuggestions]);
+
+  useEffect(()=>{ try { localStorage.setItem('vibestream_liked', JSON.stringify(likedTracks.slice(0,200))); } catch{} }, [likedTracks]);
+  useEffect(()=>{ try { localStorage.setItem('vibestream_recent', JSON.stringify(recentlyPlayed.slice(0,100))); } catch{} }, [recentlyPlayed]);
+  useEffect(()=>{ if(currentTrack) setIsFavorite(likedTracks.some(t=>t.id===currentTrack.id)); else setIsFavorite(false); }, [currentTrack, likedTracks]);
 
   // Load trending songs using fetch API - EXACTLY as you specified
   const loadTrendingSongs = async () => {
@@ -298,7 +359,22 @@ const EnhancedMusicApp: React.FC = () => {
 
         await audioRef.current.play();
         setIsPlaying(true);
+        setRecentlyPlayed(prev=>{const filtered=prev.filter(t=>t.id!==track.id); return [track,...filtered].slice(0,50);});
         console.log('✅ Track started playing');
+
+        // Guest preview gating: limit playback to previewLimitSeconds
+        if (isGuest && previewLimitSeconds > 0) {
+          const limiter = () => {
+            if (!audioRef.current) return;
+            if (audioRef.current.currentTime >= previewLimitSeconds) {
+              audioRef.current.pause();
+              setIsPlaying(false);
+              auth.openAuthPrompt('full-play');
+              audioRef.current.removeEventListener('timeupdate', limiter);
+            }
+          };
+          audioRef.current.addEventListener('timeupdate', limiter);
+        }
       } else {
         throw new Error('No audio URL available');
       }
@@ -452,8 +528,14 @@ const EnhancedMusicApp: React.FC = () => {
   };
 
   // Toggle favorite (local visual only)
-  const toggleFavorite = () => {
-    setIsFavorite(prev => !prev);
+  const toggleFavorite = () => { if(!currentTrack) return; setLikedTracks(prev=>{ const exists = prev.find(t=>t.id===currentTrack.id); return exists? prev.filter(t=>t.id!==currentTrack.id): [currentTrack, ...prev.filter(t=>t.id!==currentTrack.id)].slice(0,200);}); setIsFavorite(p=>!p); };
+  // Gate favorites for guests
+  const gatedToggleFavorite = () => {
+    if (isGuest) {
+      auth.openAuthPrompt('save');
+      return;
+    }
+    toggleFavorite();
   };
 
   // Cycle playback speed
@@ -680,83 +762,185 @@ const EnhancedMusicApp: React.FC = () => {
         );
       case 'playlists':
         return <TopPlaylists onPlayPlaylist={handlePlayPlaylist} />;
+      case 'recent':
         return (
           <div className="space-y-6">
-            <h2 className="text-3xl font-bold text-white">Search Results</h2>
-            <div className="grid gap-4">
-              {searchResults.map((track) => (
-                <Card 
-                  key={track.id}
-                  className="p-4 hover:bg-gray-750 transition-all duration-200 cursor-pointer group"
-                  onClick={() => playTrack(track)}
-                >
-                  <div className="flex items-center space-x-4">
-                    <div className="relative">
-                      <img
-                        src={getImageUrl(track)}
-                        alt={track.name}
-                        className="w-16 h-16 rounded-lg object-cover"
-                      />
-                      <div className="absolute inset-0 bg-black/40 rounded-lg opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
-                        <Play className="w-6 h-6 text-white" />
+            <h2 className="text-3xl font-bold text-white mb-4">🕒 Recently Played</h2>
+            {recentlyPlayed.length === 0 ? (
+              <div className="flex items-center justify-center py-12">
+                <div className="text-center">
+                  <div className="text-6xl mb-4">🎧</div>
+                  <h3 className="text-xl font-semibold text-white mb-2">No tracks played yet</h3>
+                  <p className="text-gray-400">Your recently played tracks will appear here</p>
+                  <button 
+                    onClick={() => setCurrentView('home')}
+                    className="mt-4 px-4 py-2 bg-green-500 text-white rounded-lg hover:bg-green-600 transition-colors"
+                  >
+                    Back to Home
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <div className="grid gap-4 grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
+                {recentlyPlayed.map((track, idx) => (
+                  <Card
+                    key={track.id}
+                    className="p-4 hover:bg-gray-750 transition-all duration-200 cursor-pointer group"
+                    onClick={() => playTrack(track)}
+                  >
+                    <div className="flex items-center space-x-4">
+                      <div className="relative">
+                        <img
+                          src={getImageUrl(track)}
+                          alt={track.name}
+                          className="w-16 h-16 rounded-lg object-cover"
+                        />
+                        <div className="absolute inset-0 bg-black/40 rounded-lg opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
+                          <Play className="w-6 h-6 text-white" />
+                        </div>
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <h3 className="font-semibold text-white truncate">{track.name}</h3>
+                        <p className="text-gray-400 truncate">
+                          {track.artists.primary.map(artist => artist.name).join(', ')}
+                        </p>
+                        <p className="text-gray-500 text-sm">{enhancedMusicService.formatDuration(track.duration)}</p>
+                      </div>
+                      <div className="opacity-0 group-hover:opacity-100 transition-opacity">
+                        <span className="text-green-400 font-medium text-sm">Play</span>
                       </div>
                     </div>
-                    <div className="flex-1 min-w-0">
-                      <h3 className="font-semibold text-white truncate">{track.name}</h3>
-                      <p className="text-gray-400 truncate">
-                        {track.artists.primary.map(artist => artist.name).join(', ')}
-                      </p>
-                      <p className="text-gray-500 text-sm">{enhancedMusicService.formatDuration(track.duration)}</p>
-                    </div>
-                    <div className="opacity-0 group-hover:opacity-100 transition-opacity">
-                      <span className="text-green-400 font-medium text-sm">Play</span>
-                    </div>
-                  </div>
-                </Card>
-              ))}
-            </div>
+                  </Card>
+                ))}
+              </div>
+            )}
           </div>
         );
-
-      case 'trending':
+      case 'liked':
         return (
           <div className="space-y-6">
-            <h2 className="text-3xl font-bold text-white">Trending Now</h2>
-            <div className="grid gap-4">
-              {trendingSongs.map((track) => (
-                <Card 
-                  key={track.id}
-                  className="p-4 hover:bg-gray-750 transition-all duration-200 cursor-pointer group"
-                  onClick={() => playTrack(track)}
-                >
-                  <div className="flex items-center space-x-4">
-                    <div className="relative">
-                      <img
-                        src={getImageUrl(track)}
-                        alt={track.name}
-                        className="w-16 h-16 rounded-lg object-cover"
-                      />
-                      <div className="absolute inset-0 bg-black/40 rounded-lg opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
-                        <Play className="w-6 h-6 text-white" />
+            <h2 className="text-3xl font-bold text-white mb-4">❤️ Liked Songs</h2>
+            {likedTracks.length === 0 ? (
+              <div className="flex items-center justify-center py-12">
+                <div className="text-center">
+                  <div className="text-6xl mb-4">💔</div>
+                  <h3 className="text-xl font-semibold text-white mb-2">No liked songs yet</h3>
+                  <p className="text-gray-400">Your favorite tracks will appear here</p>
+                  <button 
+                    onClick={() => setCurrentView('home')}
+                    className="mt-4 px-4 py-2 bg-green-500 text-white rounded-lg hover:bg-green-600 transition-colors"
+                  >
+                    Back to Home
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <div className="grid gap-4 grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
+                {likedTracks.map((track) => (
+                  <Card
+                    key={track.id}
+                    className="p-4 hover:bg-gray-750 transition-all duration-200 cursor-pointer group"
+                    onClick={() => playTrack(track)}
+                  >
+                    <div className="flex items-center space-x-4">
+                      <div className="relative">
+                        <img
+                          src={getImageUrl(track)}
+                          alt={track.name}
+                          className="w-16 h-16 rounded-lg object-cover"
+                        />
+                        <div className="absolute inset-0 bg-black/40 rounded-lg opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
+                          <Play className="w-6 h-6 text-white" />
+                        </div>
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <h3 className="font-semibold text-white truncate">{track.name}</h3>
+                        <p className="text-gray-400 truncate">
+                          {track.artists.primary.map(artist => artist.name).join(', ')}
+                        </p>
+                        <p className="text-gray-500 text-sm">{enhancedMusicService.formatDuration(track.duration)}</p>
+                      </div>
+                      <div className="opacity-0 group-hover:opacity-100 transition-opacity">
+                        <span className="text-green-400 font-medium text-sm">Play</span>
                       </div>
                     </div>
-                    <div className="flex-1 min-w-0">
-                      <h3 className="font-semibold text-white truncate">{track.name}</h3>
-                      <p className="text-gray-400 truncate">
-                        {track.artists.primary.map(artist => artist.name).join(', ')}
-                      </p>
-                      <p className="text-gray-500 text-sm">{enhancedMusicService.formatDuration(track.duration)}</p>
-                    </div>
-                    <div className="opacity-0 group-hover:opacity-100 transition-opacity">
-                      <span className="text-green-400 font-medium text-sm">Play</span>
-                    </div>
-                  </div>
-                </Card>
-              ))}
-            </div>
+                  </Card>
+                ))}
+              </div>
+            )}
           </div>
         );
-
+      case 'queue':
+        return (
+          <div className="space-y-6">
+            <div className="flex items-center justify-between">
+              <h2 className="text-3xl font-bold text-white">📚 Playback Queue</h2>
+              <Button 
+                variant="ghost" 
+                className="text-gray-400 hover:text-white"
+                onClick={() => setShowQueuePanel(false)}
+              >
+                Close
+              </Button>
+            </div>
+            {queue.length === 0 ? (
+              <div className="flex items-center justify-center py-12">
+                <div className="text-center">
+                  <div className="text-6xl mb-4">🎶</div>
+                  <h3 className="text-xl font-semibold text-white mb-2">Queue is empty</h3>
+                  <p className="text-gray-400">Add some tracks to get started</p>
+                  <button 
+                    onClick={() => setCurrentView('home')}
+                    className="mt-4 px-4 py-2 bg-green-500 text-white rounded-lg hover:bg-green-600 transition-colors"
+                  >
+                    Back to Home
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <div className="space-y-4">
+                {queue.map((track, idx) => {
+                  const isCurrent = currentTrack?.id === track.id;
+                  return (
+                    <Card
+                      key={track.id}
+                      className={`p-4 group relative overflow-hidden transition-all duration-300 cursor-pointer bg-gradient-to-b from-gray-800/50 to-gray-900/80 border border-gray-700/50 hover:border-green-500/50 hover:shadow-lg hover:shadow-green-500/10 ${isCurrent ? 'ring-2 ring-green-500/60' : ''}`}
+                      onClick={() => playTrack(track)}
+                    >
+                      <div className="space-y-3">
+                        <div className="relative aspect-square overflow-hidden rounded-md">
+                          <img
+                            src={getImageUrl(track)}
+                            alt={track.name}
+                            className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
+                            loading="lazy"
+                          />
+                          <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
+                            <div className="bg-green-500 rounded-full p-3 shadow-lg transform scale-0 group-hover:scale-100 transition-transform duration-300">
+                              <Play className="w-4 h-4 text-white" fill="white" />
+                            </div>
+                          </div>
+                          {isCurrent && (
+                            <div className="absolute top-1 left-1 bg-green-500 text-gray-900 text-[10px] font-bold px-2 py-0.5 rounded-full">PLAYING</div>
+                          )}
+                        </div>
+                        <div className="space-y-1">
+                          <h3 className="font-semibold text-white text-sm leading-tight truncate" title={track.name}>{track.name}</h3>
+                          <p className="text-[11px] text-gray-400 truncate" title={track.artists.primary.map(a => a.name).join(', ')}>
+                            {track.artists.primary.map(a => a.name).join(', ')}
+                          </p>
+                          <p className="text-[10px] text-gray-500 font-mono">
+                            {enhancedMusicService.formatDuration(track.duration)}
+                          </p>
+                        </div>
+                      </div>
+                    </Card>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        );
       default: // home
         return (
           <div className="space-y-8">
@@ -971,26 +1155,94 @@ const EnhancedMusicApp: React.FC = () => {
     <div className="h-screen bg-gray-900 text-white flex flex-col">
       <audio ref={audioRef} crossOrigin="anonymous" />
       {/* Header */}
-      <header className="bg-gray-900 border-b border-gray-800/70 md:border-gray-700 md:p-4 px-4 pt-3 pb-2 relative sticky top-0 z-50 backdrop-blur-md">
+      <header className="sticky top-0 z-50 backdrop-blur-xl bg-[#0B0F14]/80 border-b border-white/10 md:p-4 px-4 pt-3 pb-2">
         {/* Mobile Header */}
         <div className="md:hidden space-y-3">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center space-x-2">
-              <div className="w-8 h-8 rounded-xl bg-gradient-to-br from-green-500 to-emerald-600 flex items-center justify-center shadow-inner ring-1 ring-green-400/30">
-                <span className="text-white text-base">🎵</span>
-              </div>
-              <h1 className="text-xl font-extrabold tracking-tight bg-gradient-to-r from-green-400 to-emerald-300 bg-clip-text text-transparent">VibeStream</h1>
+          <div className="flex items-center justify-between relative">
+            <div className="flex items-center gap-2 select-none">
+              <button onClick={() => setShowUserMenu(v => !v)} data-user-menu-button title="Open menu" className="inline-flex items-center justify-center">
+                <img src={LOGO_URL} alt="VibeStream logo" className="w-10 h-10 rounded-lg shadow-sm ring-1 ring-white/10 object-contain p-0.5" />
+              </button>
+              <button onClick={() => setCurrentView('home')} title="VibeStream Home" className="text-left">
+                <h1 className="text-xl font-extrabold tracking-tight bg-gradient-to-r from-[#14B8A6] to-emerald-300 bg-clip-text text-transparent">VibeStream</h1>
+              </button>
             </div>
-            <div className="flex items-center space-x-2">
-              <Button variant="ghost" size="sm" onClick={() => setCurrentView('search')} className={`p-2 h-9 w-9 ${currentView==='search'?'text-green-400':'text-gray-300'} hover:text-white hover:bg-gray-800 rounded-lg`} title="Search">
-                <Search className="w-5 h-5" />
-              </Button>
-              <Button variant="green" size="sm" className="h-9 px-3 text-sm font-semibold shadow-lg shadow-green-500/20">Log In</Button>
-            </div>
+            {showUserMenu && (
+                <div ref={mobileUserMenuRef} className="absolute left-0 top-12 z-50 w-80 max-w-[90vw] rounded-2xl border border-white/10 bg-[#0B0F14]/95 shadow-2xl backdrop-blur p-3 space-y-3">
+                  {/* Mini header */}
+                  <div className="flex items-center gap-3">
+                    <img src={LOGO_URL} alt="VibeStream" className="w-7 h-7 rounded-md ring-1 ring-white/10 object-contain" />
+                    <div className="min-w-0">
+                      <p className="text-xs text-gray-400">Hey{user ? ',' : ''}</p>
+                      <p className="text-sm font-semibold truncate">{displayName}</p>
+                    </div>
+                    {currentTrack && (
+                      <button onClick={() => setShowQueuePanel(v=>!v)} className="ml-auto text-[11px] px-2 py-1 rounded-full bg-white/5 hover:bg-white/10 text-gray-300 border border-white/10">Queue</button>
+                    )}
+                  </div>
+                  {/* Resume */}
+                  {currentTrack && (
+                    <button onClick={togglePlayPause} className="w-full flex items-center gap-3 p-2 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 group">
+                      <img src={getImageUrl(currentTrack)} alt={currentTrack.name} className="w-10 h-10 rounded-lg object-cover" />
+                      <div className="min-w-0 text-left">
+                        <p className="text-sm text-white truncate">{currentTrack.name}</p>
+                        <p className="text-[11px] text-gray-400 truncate">{currentTrack.artists.primary.map(a=>a.name).join(', ')}</p>
+                      </div>
+                      <span className="ml-auto inline-flex items-center gap-1 text-xs text-emerald-300">
+                        {isPlaying ? <Pause className="w-4 h-4" /> : <Play className="w-4 h-4" />} {isPlaying ? 'Pause' : 'Resume'}
+                      </span>
+                    </button>
+                  )}
+                  {/* Quick actions */}
+                  <div className="grid grid-cols-3 gap-2">
+                    <button onClick={() => { setCurrentView('trending'); setShowUserMenu(false); }} className="p-3 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 flex flex-col items-center gap-2">
+                      <Music className="w-5 h-5 text-emerald-300" />
+                      <span className="text-[11px] text-gray-200">Start Mix</span>
+                    </button>
+                    <button onClick={() => { setCurrentView('playlists'); setShowUserMenu(false); }} className="p-3 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 flex flex-col items-center gap-2">
+                      <List className="w-5 h-5 text-emerald-300" />
+                      <span className="text-[11px] text-gray-200">Playlists</span>
+                    </button>
+                    <button onClick={() => { setCurrentView('liked'); setShowUserMenu(false); }} className="p-3 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 flex flex-col items-center gap-2">
+                      <Heart className="w-5 h-5 text-emerald-300" />
+                      <span className="text-[11px] text-gray-200">Liked</span>
+                    </button>
+                  </div>
+                  {/* Recently Played */}
+                  {recentlyPlayed.length > 0 && (
+                    <div className="space-y-2">
+                      <p className="text-[11px] uppercase tracking-wide text-gray-400">Recent</p>
+                      <div className="space-y-1">
+                        {recentlyPlayed.slice(0,3).map((t, i) => (
+                          <button key={`${t.id}-${i}`} onClick={() => { playTrack(t); setShowUserMenu(false); }} className="w-full flex items-center gap-3 px-2 py-1.5 rounded-lg hover:bg-white/5">
+                            <img src={getImageUrl(t)} alt={t.name} className="w-8 h-8 rounded object-cover" />
+                            <div className="min-w-0 text-left">
+                              <p className="text-xs text-white truncate">{t.name}</p>
+                              <p className="text-[10px] text-gray-400 truncate">{t.artists.primary.map(a=>a.name).join(', ')}</p>
+                            </div>
+                            <Play className="w-3.5 h-3.5 text-emerald-300 ml-auto" />
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                  {/* CTA and Sign out */}
+                  <div className="space-y-2">
+                    {isGuest ? (
+                      <button onClick={() => { auth.openAuthPrompt('cta'); setShowUserMenu(false); }} className="w-full py-2.5 rounded-xl bg-emerald-500 text-gray-900 font-semibold hover:bg-emerald-400 transition shadow-lg shadow-emerald-500/20">Sign in to unlock full songs</button>
+                    ) : (
+                      <>
+                        <button onClick={() => { setCurrentView('playlists'); setShowUserMenu(false); }} className="w-full py-2.5 rounded-xl bg-white/5 text-white font-semibold hover:bg-white/10 border border-white/10">Explore top playlists</button>
+                        <button onClick={() => { auth.signOut(); setShowUserMenu(false); }} className="w-full py-2 rounded-xl bg-white/0 text-red-300 hover:text-red-200 hover:bg-white/5 border border-white/10">Sign out</button>
+                      </>
+                    )}
+                  </div>
+                </div>
+              )}
           </div>
           {/* Mobile Search Bar */}
           <div className="relative">
-            <Search className={`absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 transition-all duration-300 ${isSearching ? 'text-green-400 animate-pulse' : 'text-gray-400'}`} />
+            <Search className={`absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 transition-all duration-300 ${isSearching ? 'text-[#14B8A6] animate-pulse' : 'text-gray-400'}`} />
             <Input
               placeholder="Search songs, artists..."
               value={searchQuery}
@@ -998,7 +1250,8 @@ const EnhancedMusicApp: React.FC = () => {
               onKeyPress={(e) => e.key === 'Enter' && performSearch(searchQuery)}
               onFocus={() => searchQuery.length > 2 && setShowSuggestions(true)}
               onBlur={() => setTimeout(() => setShowSuggestions(false), 150)}
-              className={`pl-11 w-full pr-10 h-11 rounded-xl bg-gray-800/70 border-gray-700/60 focus:ring-green-500/60 focus:bg-gray-800 transition-all ${isSearching ? 'ring-2 ring-green-400/40' : ''}`}
+              className={`pl-11 w-full pr-10 h-11 rounded-xl bg-white/5 border border-white/10 text-white placeholder-gray-400 focus:bg-white/10 focus:ring-2 focus:ring-[#14B8A6]/40 transition-all ${isSearching ? 'ring-2 ring-[#14B8A6]/40' : ''}`}
+              ref={mobileSearchInputRef}
             />
             {isSearching && (
               <div className="absolute right-3 top-1/2 -translate-y-1/2">
@@ -1006,14 +1259,14 @@ const EnhancedMusicApp: React.FC = () => {
               </div>
             )}
             {showSuggestions && searchSuggestions.length > 0 && (
-              <div className="absolute top-full left-0 right-0 mt-2 bg-gray-850/95 backdrop-blur-xl border border-gray-700 rounded-xl shadow-2xl z-50 max-h-60 overflow-y-auto divide-y divide-gray-800">
+              <div ref={mobileSearchPanelRef} className="absolute top-full left-0 right-0 mt-2 bg-[#0B0F14]/95 backdrop-blur-xl border border-white/10 rounded-xl shadow-2xl z-50 max-h-60 overflow-y-auto divide-y divide-white/5">
                 {searchSuggestions.map((suggestion, i) => (
                   <button
                     key={i}
                     onClick={() => { setSearchQuery(suggestion); setShowSuggestions(false); performSearch(suggestion); }}
-                    className="w-full px-4 py-3 text-left hover:bg-gray-800/70 transition-colors duration-150 flex items-center space-x-3 group"
+                    className="w-full px-4 py-3 text-left hover:bg-white/5 transition-colors duration-150 flex items-center space-x-3 group"
                   >
-                    <Search className="w-4 h-4 text-gray-500 group-hover:text-green-400" />
+                    <Search className="w-4 h-4 text-gray-500 group-hover:text-[#14B8A6]" />
                     <span className="text-sm text-gray-200 group-hover:text-white">{suggestion}</span>
                   </button>
                 ))}
@@ -1021,14 +1274,93 @@ const EnhancedMusicApp: React.FC = () => {
             )}
           </div>
         </div>
-        {/* Desktop Header (unchanged) */}
-        <div className="hidden md:flex items-center justify-between">
-          <div className="flex items-center space-x-4">
-            <h1 className="text-2xl font-bold text-green-400">🎵 VibeStream</h1>
+        {/* Desktop Header */}
+          <div className="hidden md:flex items-center justify-between">
+          <div className="flex items-center space-x-4 relative">
+            <div className="flex items-center gap-3 group select-none">
+              <button onClick={() => setShowUserMenu(v=>!v)} data-user-menu-button title="Open menu" className="inline-flex items-center justify-center">
+                <img src={LOGO_URL} alt="VibeStream logo" className="w-10 h-10 rounded-lg shadow ring-1 ring-white/10 group-hover:ring-[#14B8A6]/40 transition object-contain p-0.5" />
+              </button>
+              <button onClick={() => setCurrentView('home')} title="VibeStream Home" className="text-left">
+                <span className="text-2xl font-extrabold tracking-tight bg-gradient-to-r from-[#14B8A6] to-emerald-300 bg-clip-text text-transparent">VibeStream</span>
+              </button>
+            </div>
+            {showUserMenu && (
+              <div ref={desktopUserMenuRef} className="absolute left-0 top-12 z-50 w-[380px] rounded-2xl border border-white/10 bg-[#0B0F14]/95 shadow-2xl backdrop-blur p-4 space-y-3">
+                {/* Mini header */}
+                <div className="flex items-center gap-3">
+                  <img src={LOGO_URL} alt="VibeStream" className="w-8 h-8 rounded-lg ring-1 ring-white/10 object-contain" />
+                  <div className="min-w-0">
+                    <p className="text-xs text-gray-400">Welcome back</p>
+                    <p className="text-sm font-semibold truncate">{displayName}</p>
+                  </div>
+                  {currentTrack && (
+                    <button onClick={() => setShowQueuePanel(v=>!v)} className="ml-auto text-[11px] px-2 py-1 rounded-full bg-white/5 hover:bg-white/10 text-gray-300 border border-white/10">Open Queue</button>
+                  )}
+                </div>
+                {/* Resume */}
+                {currentTrack && (
+                  <button onClick={togglePlayPause} className="w-full flex items-center gap-3 p-3 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 group">
+                    <img src={getImageUrl(currentTrack)} alt={currentTrack.name} className="w-12 h-12 rounded-lg object-cover" />
+                    <div className="min-w-0 text-left">
+                      <p className="text-sm text-white truncate">{currentTrack.name}</p>
+                      <p className="text-[11px] text-gray-400 truncate">{currentTrack.artists.primary.map(a=>a.name).join(', ')}</p>
+                    </div>
+                    <span className="ml-auto inline-flex items-center gap-1 text-xs text-emerald-300">
+                      {isPlaying ? <Pause className="w-4 h-4" /> : <Play className="w-4 h-4" />} {isPlaying ? 'Pause' : 'Resume'}
+                    </span>
+                  </button>
+                )}
+                {/* Quick actions */}
+                <div className="grid grid-cols-3 gap-3">
+                  <button onClick={() => { setCurrentView('trending'); setShowUserMenu(false); }} className="p-4 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 flex flex-col items-center gap-2">
+                    <Music className="w-5 h-5 text-emerald-300" />
+                    <span className="text-xs text-gray-200">Start Mix</span>
+                  </button>
+                  <button onClick={() => { setCurrentView('playlists'); setShowUserMenu(false); }} className="p-4 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 flex flex-col items-center gap-2">
+                    <List className="w-5 h-5 text-emerald-300" />
+                    <span className="text-xs text-gray-200">Playlists</span>
+                  </button>
+                  <button onClick={() => { setCurrentView('liked'); setShowUserMenu(false); }} className="p-4 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 flex flex-col items-center gap-2">
+                    <Heart className="w-5 h-5 text-emerald-300" />
+                    <span className="text-xs text-gray-200">Liked</span>
+                  </button>
+                </div>
+                {/* Recently Played */}
+                {recentlyPlayed.length > 0 && (
+                  <div className="space-y-2">
+                    <p className="text-[11px] uppercase tracking-wide text-gray-400">Recently played</p>
+                    <div className="space-y-2">
+                      {recentlyPlayed.slice(0,4).map((t, i) => (
+                        <button key={`${t.id}-${i}`} onClick={() => { playTrack(t); setShowUserMenu(false); }} className="w-full flex items-center gap-3 px-2 py-2 rounded-lg hover:bg-white/5">
+                          <img src={getImageUrl(t)} alt={t.name} className="w-9 h-9 rounded object-cover" />
+                          <div className="min-w-0 text-left">
+                            <p className="text-sm text-white truncate">{t.name}</p>
+                            <p className="text-[11px] text-gray-400 truncate">{t.artists.primary.map(a=>a.name).join(', ')}</p>
+                          </div>
+                          <Play className="w-4 h-4 text-emerald-300 ml-auto" />
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                {/* CTA and Sign out */}
+                <div className="space-y-2">
+                  {isGuest ? (
+                    <button onClick={() => { auth.openAuthPrompt('cta'); setShowUserMenu(false); }} className="w-full py-2.5 rounded-xl bg-emerald-500 text-gray-900 font-semibold hover:bg-emerald-400 transition shadow-lg shadow-emerald-500/20">Sign in to unlock full songs</button>
+                  ) : (
+                    <>
+                      <button onClick={() => { setCurrentView('playlists'); setShowUserMenu(false); }} className="w-full py-2.5 rounded-xl bg-white/5 text-white font-semibold hover:bg-white/10 border border-white/10">Explore top playlists</button>
+                      <button onClick={() => { auth.signOut(); setShowUserMenu(false); }} className="w-full py-2 rounded-xl bg-white/0 text-red-300 hover:text-red-200 hover:bg-white/5 border border-white/10">Sign out</button>
+                    </>
+                  )}
+                </div>
+              </div>
+            )}
           </div>
           <div className="flex-1 max-w-md mx-8">
             <div className="relative">
-              <Search className={`absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 transition-all duration-300 ${isSearching ? 'text-green-400 animate-pulse' : 'text-gray-400'}`} />
+              <Search className={`absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 transition-all duration-300 ${isSearching ? 'text-[#14B8A6] animate-pulse' : 'text-gray-400'}`} />
               <Input
                 placeholder="Search for songs, artists, albums..."
                 value={searchQuery}
@@ -1036,7 +1368,8 @@ const EnhancedMusicApp: React.FC = () => {
                 onKeyPress={(e) => e.key === 'Enter' && performSearch(searchQuery)}
                 onFocus={() => searchQuery.length > 2 && setShowSuggestions(true)}
                 onBlur={() => setTimeout(() => setShowSuggestions(false), 150)}
-                className={`pl-10 w-full transition-all duration-300 ${isSearching ? 'ring-2 ring-green-400/50' : ''}`}
+                className={`pl-10 w-full rounded-xl bg-white/5 border border-white/10 text-white placeholder-gray-400 focus:bg-white/10 focus:ring-2 focus:ring-[#14B8A6]/40 transition-all duration-300 ${isSearching ? 'ring-2 ring-[#14B8A6]/50' : ''}`}
+                ref={desktopSearchInputRef}
               />
               {isSearching && (
                 <div className="absolute right-3 top-1/2 -translate-y-1/2">
@@ -1044,10 +1377,10 @@ const EnhancedMusicApp: React.FC = () => {
                 </div>
               )}
               {showSuggestions && searchSuggestions.length > 0 && (
-                <div className="absolute top-full left-0 right-0 mt-2 bg-gray-800 border border-gray-600 rounded-lg shadow-lg z-50 max-h-48 overflow-y-auto">
+                <div ref={desktopSearchPanelRef} className="absolute top-full left-0 right-0 mt-2 bg-[#0B0F14] border border-white/10 rounded-xl shadow-2xl z-50 max-h-60 overflow-y-auto">
                   {searchSuggestions.map((suggestion, i) => {
                     const Icon = Search; return (
-                      <button key={i} onClick={() => { setSearchQuery(suggestion); setShowSuggestions(false); performSearch(suggestion); }} className="w-full px-4 py-3 text-left hover:bg-gray-700 transition-colors duration-200 first:rounded-t-lg last:rounded-b-lg flex items-center space-x-3">
+                      <button key={i} onClick={() => { setSearchQuery(suggestion); setShowSuggestions(false); performSearch(suggestion); }} className="w-full px-4 py-3 text-left hover:bg-white/5 transition-colors duration-200 first:rounded-t-lg last:rounded-b-lg flex items-center space-x-3">
                         <Icon className="w-4 h-4 text-gray-400" />
                         <span className="text-white">{suggestion}</span>
                       </button>
@@ -1056,10 +1389,7 @@ const EnhancedMusicApp: React.FC = () => {
               )}
             </div>
           </div>
-          <div className="flex items-center space-x-4">
-            <Button variant="ghost" size="sm">Sign Up</Button>
-            <Button variant="green" size="sm">Log In</Button>
-          </div>
+          <div className="flex items-center space-x-4 relative"></div>
         </div>
       </header>
       {/* Layout */}
@@ -1078,7 +1408,7 @@ const EnhancedMusicApp: React.FC = () => {
             <h3 className="text-gray-400 text-sm font-semibold uppercase tracking-wide mb-4">My Library</h3>
             <nav className="space-y-2">
               {libraryItems.map(item => { const Icon = item.icon; return (
-                <button key={item.id} className="w-full flex items-center space-x-3 px-3 py-2 rounded-lg text-left transition-colors text-gray-400 hover:text-white hover:bg-gray-800">
+                <button key={item.id} onClick={() => setCurrentView(item.id as any)} className="w-full flex items-center space-x-3 px-3 py-2 rounded-lg text-left transition-colors text-gray-400 hover:text-white hover:bg-gray-800">
                   <Icon className="w-5 h-5" /> <span className="font-medium">{item.label}</span>
                 </button>
               );})}
@@ -1136,7 +1466,7 @@ const EnhancedMusicApp: React.FC = () => {
                 <p className="text-gray-300 text-[11px] md:text-sm truncate">{currentTrack.artists.primary.map((a:any)=>a.name).join(', ')}</p>
                 {queue[currentIndex + 1] && <p className="hidden md:block text-[11px] text-gray-500 truncate mt-0.5">Next: {queue[currentIndex + 1].name}</p>}
               </div>
-              <Button variant="ghost" size="sm" onClick={toggleFavorite} className={`hover:scale-110 transition-all duration-200 ${isFavorite ? 'text-red-400' : 'text-gray-400 hover:text-red-400'}`} title={isFavorite ? 'Remove from favorites' : 'Add to favorites'}>
+              <Button variant="ghost" size="sm" onClick={gatedToggleFavorite} className={`hover:scale-110 transition-all duration-200 ${isFavorite ? 'text-red-400' : 'text-gray-400 hover:text-red-400'}`} title={isFavorite ? 'Remove from favorites' : 'Add to favorites'}>
                 <Heart className="w-5 h-5" fill={isFavorite ? 'currentColor' : 'none'} />
               </Button>
             </div>
@@ -1183,6 +1513,17 @@ const EnhancedMusicApp: React.FC = () => {
           </button>
         );})}
       </nav>
+
+      {/* Guest subtle banner */}
+      {isGuest && (
+        <div className="fixed bottom-12 left-1/2 -translate-x-1/2 z-30">
+          <div className="backdrop-blur-xl bg-white/5 border border-white/10 text-white text-xs px-4 py-2 rounded-full shadow-lg">
+            Sign in for full songs & save
+          </div>
+        </div>
+      )}
+
+  {/* Auth Modals removed; handled at App root */}
     </div>
   );
 };
