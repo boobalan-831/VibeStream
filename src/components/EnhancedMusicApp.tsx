@@ -22,6 +22,7 @@ import { useVibeStream } from '../context/VibeStreamContext';
 import { useAuth } from '../context/AuthContext';
 import { enhancedMusicService, SaavnTrack } from '../services/enhancedMusicService';
 import TopPlaylists from './TopPlaylists';
+import PremiumPlayer from './PremiumPlayer';
 // Auth gating is handled in App root; no login/register modals here
 // Resolve logo URL via Vite for bundling & base path safety
 const LOGO_URL = new URL('../../icons/VStream-logo.png', import.meta.url).href;
@@ -131,6 +132,8 @@ const EnhancedMusicApp: React.FC = () => {
   const [isSearching, setIsSearching] = useState(false);
   const [searchSuggestions, setSearchSuggestions] = useState<string[]>([]);
   const [showSuggestions, setShowSuggestions] = useState(false);
+  const [selectedSuggestionIndex, setSelectedSuggestionIndex] = useState(-1);
+  const [recentSearches, setRecentSearches] = useState<string[]>([]);
   const [volume, setVolume] = useState([80]);
   const [progress, setProgress] = useState([0]);
   const [duration, setDuration] = useState(0);
@@ -146,8 +149,17 @@ const EnhancedMusicApp: React.FC = () => {
   const [likedTracks, setLikedTracks] = useState<AppTrack[]>([]);
   const [recentlyPlayed, setRecentlyPlayed] = useState<AppTrack[]>([]);
   const [playbackSpeed, setPlaybackSpeed] = useState(1);
+  // Premium extras
+  const [sleepUntil, setSleepUntil] = useState<number | null>(null); // epoch ms for sleep end
+  const [loopA, setLoopA] = useState<number | null>(null);
+  const [loopB, setLoopB] = useState<number | null>(null);
+  // Premium UX: header scroll progress & player hover tooltip
+  const [scrollProgress, setScrollProgress] = useState(0);
+  const [hoverTime, setHoverTime] = useState<number | null>(null);
+  const [hoverX, setHoverX] = useState(0);
   // User menu state
   const [showUserMenu, setShowUserMenu] = useState(false);
+  
   // Prefer user profile image if available, otherwise fallback to app logo (no longer used in header avatar)
   const profileImageUrl = (user as any)?.user_metadata?.avatar_url || (user as any)?.user_metadata?.picture || null;
   // Friendly display name (avoid showing email)
@@ -165,6 +177,7 @@ const EnhancedMusicApp: React.FC = () => {
   const [topCharts, setTopCharts] = useState<AppTrack[]>([]);
   
   const audioRef = useRef<HTMLAudioElement>(null);
+  const originalVolumeRef = useRef<number | null>(null);
   // Header UI refs for click-outside handling
   const desktopUserMenuRef = useRef<HTMLDivElement | null>(null);
   const mobileUserMenuRef = useRef<HTMLDivElement | null>(null);
@@ -172,6 +185,15 @@ const EnhancedMusicApp: React.FC = () => {
   const mobileSearchPanelRef = useRef<HTMLDivElement | null>(null);
   const desktopSearchInputRef = useRef<HTMLInputElement | null>(null);
   const mobileSearchInputRef = useRef<HTMLInputElement | null>(null);
+  useEffect(() => {
+    try {
+      const rs = localStorage.getItem('vibestream_recent_searches');
+      if (rs) {
+        const arr = JSON.parse(rs);
+        if (Array.isArray(arr)) setRecentSearches(arr.slice(0, 8));
+      }
+    } catch {}
+  }, []);
 
   // Load trending songs on component mount
   useEffect(() => {
@@ -183,6 +205,19 @@ const EnhancedMusicApp: React.FC = () => {
       const recentRaw = localStorage.getItem('vibestream_recent');
       if (recentRaw) { const parsedR = JSON.parse(recentRaw); if(Array.isArray(parsedR)) setRecentlyPlayed(parsedR); }
     } catch(e) { console.warn('persist load fail', e); }
+  }, []);
+
+  // Track page scroll progress for a subtle header progress line
+  useEffect(() => {
+    const onScroll = () => {
+      const doc = document.documentElement;
+      const max = doc.scrollHeight - doc.clientHeight;
+      const pct = max > 0 ? (doc.scrollTop / max) * 100 : 0;
+      setScrollProgress(pct);
+    };
+    window.addEventListener('scroll', onScroll, { passive: true } as any);
+    onScroll();
+    return () => window.removeEventListener('scroll', onScroll as any);
   }, []);
 
   // Click-outside to close menus and search suggestions
@@ -258,6 +293,7 @@ const EnhancedMusicApp: React.FC = () => {
   // Enhanced search with suggestions & small debounce
   const performSearch = async (query: string) => {
     if (!query.trim()) return;
+    setSelectedSuggestionIndex(-1);
     setHasSearched(true);
     setIsSearching(true);
     setIsLoading(true);
@@ -270,6 +306,14 @@ const EnhancedMusicApp: React.FC = () => {
       setSearchResults(results);
       if (suggestions.length) setSearchSuggestions(suggestions);
       setCurrentView('search');
+      // save recent searches
+      try {
+        setRecentSearches(prev => {
+          const next = [query, ...prev.filter(q => q.toLowerCase() !== query.toLowerCase())].slice(0, 8);
+          localStorage.setItem('vibestream_recent_searches', JSON.stringify(next));
+          return next;
+        });
+      } catch {}
       console.log(`✅ Search returned ${results.length} tracks, ${suggestions.length} suggestions`);
     } catch (e) {
       console.error('❌ Enhanced search failed:', e);
@@ -283,6 +327,7 @@ const EnhancedMusicApp: React.FC = () => {
   // Handle search input with suggestions
   const handleSearchInput = (value: string) => {
     setSearchQuery(value);
+    setSelectedSuggestionIndex(-1);
     if (debounceTimer) clearTimeout(debounceTimer);
     if (value.length < 3) {
       setShowSuggestions(false);
@@ -301,6 +346,29 @@ const EnhancedMusicApp: React.FC = () => {
     ];
     setSearchSuggestions(quick);
     setShowSuggestions(true);
+  };
+
+  const handleSearchKeyDown = (e: React.KeyboardEvent<HTMLInputElement>, context: 'desktop' | 'mobile') => {
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      setShowSuggestions(true);
+      setSelectedSuggestionIndex(i => Math.min((i < 0 ? -1 : i) + 1, searchSuggestions.length - 1));
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      setSelectedSuggestionIndex(i => Math.max(i - 1, -1));
+    } else if (e.key === 'Enter') {
+      if (selectedSuggestionIndex >= 0 && searchSuggestions[selectedSuggestionIndex]) {
+        const s = searchSuggestions[selectedSuggestionIndex];
+        setSearchQuery(s);
+        setShowSuggestions(false);
+        performSearch(s);
+      } else {
+        performSearch(searchQuery);
+      }
+    } else if (e.key === 'Escape') {
+      setShowSuggestions(false);
+      (context === 'desktop' ? desktopSearchInputRef : mobileSearchInputRef).current?.blur();
+    }
   };
 
   // Get download URL for a track using enhanced service
@@ -527,6 +595,79 @@ const EnhancedMusicApp: React.FC = () => {
     setVolume(value);
   };
 
+  // Premium: seek by +/- seconds
+  const seekBySeconds = (delta: number) => {
+    if (!audioRef.current || !duration) return;
+    const newTime = Math.max(0, Math.min(duration, audioRef.current.currentTime + delta));
+    audioRef.current.currentTime = newTime;
+    setCurrentTime(newTime);
+    setProgress([duration > 0 ? (newTime / duration) * 100 : 0]);
+  };
+
+  // Premium: mute toggle
+  const [isMuted, setIsMuted] = useState(false);
+  const toggleMute = () => {
+    if (!audioRef.current) return;
+    const next = !isMuted;
+    audioRef.current.muted = next;
+    setIsMuted(next);
+  };
+
+  // Premium: handle sleep timer with smooth fade-out in last 10s
+  useEffect(() => {
+    if (!sleepUntil) return;
+    const timer = setInterval(() => {
+      const now = Date.now();
+      if (!audioRef.current) return;
+      const remainingMs = sleepUntil - now;
+      if (remainingMs <= 0) {
+        audioRef.current.pause();
+        setIsPlaying(false);
+        // restore volume
+        if (originalVolumeRef.current !== null) {
+          audioRef.current.volume = originalVolumeRef.current;
+        }
+        setSleepUntil(null);
+        originalVolumeRef.current = null;
+      } else if (remainingMs <= 10000) {
+        // fade out 0-10s
+        if (originalVolumeRef.current === null) {
+          originalVolumeRef.current = audioRef.current.volume;
+        }
+        const base = originalVolumeRef.current ?? (volume[0] / 100);
+        const vol = Math.max(0, Math.min(1, (remainingMs / 10000) * base));
+        audioRef.current.volume = vol;
+      }
+    }, 500);
+    return () => clearInterval(timer);
+  }, [sleepUntil, volume]);
+
+  const setSleepMinutes = (minutes: number) => {
+    setSleepUntil(Date.now() + minutes * 60 * 1000);
+  };
+  const cancelSleep = () => {
+    setSleepUntil(null);
+    if (audioRef.current && originalVolumeRef.current !== null) {
+      audioRef.current.volume = originalVolumeRef.current;
+    }
+    originalVolumeRef.current = null;
+  };
+
+  // Premium: A-B loop handling
+  useEffect(() => {
+    if (!audioRef.current) return;
+    const check = () => {
+      if (!audioRef.current) return;
+      if (loopA !== null && loopB !== null && loopB > loopA) {
+        if (audioRef.current.currentTime >= loopB) {
+          audioRef.current.currentTime = loopA;
+        }
+      }
+    };
+    audioRef.current.addEventListener('timeupdate', check);
+    return () => audioRef.current?.removeEventListener('timeupdate', check);
+  }, [loopA, loopB]);
+
   // Toggle favorite (local visual only)
   const toggleFavorite = () => { if(!currentTrack) return; setLikedTracks(prev=>{ const exists = prev.find(t=>t.id===currentTrack.id); return exists? prev.filter(t=>t.id!==currentTrack.id): [currentTrack, ...prev.filter(t=>t.id!==currentTrack.id)].slice(0,200);}); setIsFavorite(p=>!p); };
   // Gate favorites for guests
@@ -554,6 +695,16 @@ const EnhancedMusicApp: React.FC = () => {
     const pct = Math.min(100, Math.max(0, ((e.clientX - rect.left) / rect.width) * 100));
     handleProgressChange([pct]);
   };
+
+  // Hover time preview for progress bar
+  const handleProgressBarMouseMove = (e: React.MouseEvent<HTMLDivElement>) => {
+    if (!duration) { setHoverTime(null); return; }
+    const rect = e.currentTarget.getBoundingClientRect();
+    const ratio = Math.min(1, Math.max(0, (e.clientX - rect.left) / rect.width));
+    setHoverTime(ratio * duration);
+    setHoverX(e.clientX - rect.left);
+  };
+  const handleProgressBarLeave = () => setHoverTime(null);
 
   // Get image URL using enhanced service
   const getImageUrl = (track: AppTrack) => {
@@ -1155,196 +1306,205 @@ const EnhancedMusicApp: React.FC = () => {
     <div className="h-screen bg-gray-900 text-white flex flex-col">
       <audio ref={audioRef} crossOrigin="anonymous" />
       {/* Header */}
-      <header className="sticky top-0 z-50 backdrop-blur-xl bg-[#0B0F14]/80 border-b border-white/10 md:p-4 px-4 pt-3 pb-2">
-        {/* Mobile Header */}
+      <header className="sticky top-0 z-50 relative backdrop-blur-xl bg-[#0B0F14]/80 border-b border-white/10 px-4 pt-3 pb-2 md:py-3">
+        {/* Subtle scroll progress line */}
+        <div className="absolute left-0 right-0 top-0 h-0.5 bg-white/5 overflow-hidden">
+          <div className={`h-full bg-gradient-to-r from-emerald-400 via-teal-400 to-cyan-400`} style={{ width: `${scrollProgress}%` }} />
+        </div>
+
+        {/* Mobile header */}
         <div className="md:hidden space-y-3">
-          <div className="flex items-center justify-between relative">
+          <div className="flex items-center justify-between">
             <div className="flex items-center gap-2 select-none">
-              <button onClick={() => setShowUserMenu(v => !v)} data-user-menu-button title="Open menu" className="inline-flex items-center justify-center">
-                <img src={LOGO_URL} alt="VibeStream logo" className="w-10 h-10 rounded-lg shadow-sm ring-1 ring-white/10 object-contain p-0.5" />
-              </button>
-              <button onClick={() => setCurrentView('home')} title="VibeStream Home" className="text-left">
-                <h1 className="text-xl font-extrabold tracking-tight bg-gradient-to-r from-[#14B8A6] to-emerald-300 bg-clip-text text-transparent">VibeStream</h1>
+              <img src={LOGO_URL} alt="VibeStream logo" className="w-10 h-10 rounded-lg shadow-sm ring-1 ring-white/10 object-contain p-0.5" />
+              <div className={`text-left`}>
+                <h1 className={`text-xl font-extrabold tracking-tight bg-gradient-to-r from-[#14B8A6] to-emerald-300 bg-clip-text text-transparent`}>VibeStream</h1>
+              </div>
+            </div>
+            <div className="flex items-center gap-2">
+              {currentTrack && (
+                <button onClick={() => setShowQueuePanel(v=>!v)} title="Open Queue" className="relative p-2 rounded-lg border border-white/10 text-gray-300 hover:text-white hover:bg-white/5">
+                  <List className="w-5 h-5" />
+                  {queue.length>0 && <span className="absolute -top-1 -right-1 bg-emerald-500 text-gray-900 text-[10px] w-4 h-4 rounded-full flex items-center justify-center font-bold">{queue.length}</span>}
+                </button>
+              )}
+              <button onClick={() => setShowUserMenu(v=>!v)} data-user-menu-button title="Account" className="inline-flex items-center justify-center w-9 h-9 rounded-full ring-1 ring-white/10 overflow-hidden bg-white/5 hover:bg-white/10">
+                {profileImageUrl ? <img src={profileImageUrl} alt="Profile" className="w-full h-full object-cover" /> : <User className="w-5 h-5 text-gray-300" />}
               </button>
             </div>
-            {showUserMenu && (
-                <div ref={mobileUserMenuRef} className="absolute left-0 top-12 z-50 w-80 max-w-[90vw] rounded-2xl border border-white/10 bg-[#0B0F14]/95 shadow-2xl backdrop-blur p-3 space-y-3">
-                  {/* Mini header */}
-                  <div className="flex items-center gap-3">
-                    <img src={LOGO_URL} alt="VibeStream" className="w-7 h-7 rounded-md ring-1 ring-white/10 object-contain" />
-                    <div className="min-w-0">
-                      <p className="text-xs text-gray-400">Hey{user ? ',' : ''}</p>
-                      <p className="text-sm font-semibold truncate">{displayName}</p>
-                    </div>
-                    {currentTrack && (
-                      <button onClick={() => setShowQueuePanel(v=>!v)} className="ml-auto text-[11px] px-2 py-1 rounded-full bg-white/5 hover:bg-white/10 text-gray-300 border border-white/10">Queue</button>
-                    )}
-                  </div>
-                  {/* Resume */}
-                  {currentTrack && (
-                    <button onClick={togglePlayPause} className="w-full flex items-center gap-3 p-2 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 group">
-                      <img src={getImageUrl(currentTrack)} alt={currentTrack.name} className="w-10 h-10 rounded-lg object-cover" />
-                      <div className="min-w-0 text-left">
-                        <p className="text-sm text-white truncate">{currentTrack.name}</p>
-                        <p className="text-[11px] text-gray-400 truncate">{currentTrack.artists.primary.map(a=>a.name).join(', ')}</p>
-                      </div>
-                      <span className="ml-auto inline-flex items-center gap-1 text-xs text-emerald-300">
-                        {isPlaying ? <Pause className="w-4 h-4" /> : <Play className="w-4 h-4" />} {isPlaying ? 'Pause' : 'Resume'}
-                      </span>
-                    </button>
-                  )}
-                  {/* Quick actions */}
-                  <div className="grid grid-cols-3 gap-2">
-                    <button onClick={() => { setCurrentView('trending'); setShowUserMenu(false); }} className="p-3 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 flex flex-col items-center gap-2">
-                      <Music className="w-5 h-5 text-emerald-300" />
-                      <span className="text-[11px] text-gray-200">Start Mix</span>
-                    </button>
-                    <button onClick={() => { setCurrentView('playlists'); setShowUserMenu(false); }} className="p-3 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 flex flex-col items-center gap-2">
-                      <List className="w-5 h-5 text-emerald-300" />
-                      <span className="text-[11px] text-gray-200">Playlists</span>
-                    </button>
-                    <button onClick={() => { setCurrentView('liked'); setShowUserMenu(false); }} className="p-3 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 flex flex-col items-center gap-2">
-                      <Heart className="w-5 h-5 text-emerald-300" />
-                      <span className="text-[11px] text-gray-200">Liked</span>
-                    </button>
-                  </div>
-                  {/* Recently Played */}
-                  {recentlyPlayed.length > 0 && (
-                    <div className="space-y-2">
-                      <p className="text-[11px] uppercase tracking-wide text-gray-400">Recent</p>
-                      <div className="space-y-1">
-                        {recentlyPlayed.slice(0,3).map((t, i) => (
-                          <button key={`${t.id}-${i}`} onClick={() => { playTrack(t); setShowUserMenu(false); }} className="w-full flex items-center gap-3 px-2 py-1.5 rounded-lg hover:bg-white/5">
-                            <img src={getImageUrl(t)} alt={t.name} className="w-8 h-8 rounded object-cover" />
-                            <div className="min-w-0 text-left">
-                              <p className="text-xs text-white truncate">{t.name}</p>
-                              <p className="text-[10px] text-gray-400 truncate">{t.artists.primary.map(a=>a.name).join(', ')}</p>
-                            </div>
-                            <Play className="w-3.5 h-3.5 text-emerald-300 ml-auto" />
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-                  {/* CTA and Sign out */}
-                  <div className="space-y-2">
-                    {isGuest ? (
-                      <button onClick={() => { auth.openAuthPrompt('cta'); setShowUserMenu(false); }} className="w-full py-2.5 rounded-xl bg-emerald-500 text-gray-900 font-semibold hover:bg-emerald-400 transition shadow-lg shadow-emerald-500/20">Sign in to unlock full songs</button>
-                    ) : (
-                      <>
-                        <button onClick={() => { setCurrentView('playlists'); setShowUserMenu(false); }} className="w-full py-2.5 rounded-xl bg-white/5 text-white font-semibold hover:bg-white/10 border border-white/10">Explore top playlists</button>
-                        <button onClick={() => { auth.signOut(); setShowUserMenu(false); }} className="w-full py-2 rounded-xl bg-white/0 text-red-300 hover:text-red-200 hover:bg-white/5 border border-white/10">Sign out</button>
-                      </>
-                    )}
-                  </div>
-                </div>
-              )}
           </div>
-          {/* Mobile Search Bar */}
+
+          {/* Mobile search */}
           <div className="relative">
-            <Search className={`absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 transition-all duration-300 ${isSearching ? 'text-[#14B8A6] animate-pulse' : 'text-gray-400'}`} />
+            <Search className={`absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 ${isSearching ? 'text-emerald-300 animate-pulse' : 'text-gray-400'}`} />
             <Input
               placeholder="Search songs, artists..."
               value={searchQuery}
               onChange={(e) => handleSearchInput(e.target.value)}
-              onKeyPress={(e) => e.key === 'Enter' && performSearch(searchQuery)}
+              onKeyDown={(e) => handleSearchKeyDown(e, 'mobile')}
               onFocus={() => searchQuery.length > 2 && setShowSuggestions(true)}
               onBlur={() => setTimeout(() => setShowSuggestions(false), 150)}
-              className={`pl-11 w-full pr-10 h-11 rounded-xl bg-white/5 border border-white/10 text-white placeholder-gray-400 focus:bg-white/10 focus:ring-2 focus:ring-[#14B8A6]/40 transition-all ${isSearching ? 'ring-2 ring-[#14B8A6]/40' : ''}`}
+              className={`pl-11 w-full pr-10 h-11 rounded-xl bg-white/5 border border-white/10 text-white placeholder-gray-400 focus:bg-white/10 focus:ring-2 focus:ring-[#14B8A6]/40 transition-all ${isSearching ? 'ring-2' : ''}`}
               ref={mobileSearchInputRef}
             />
             {isSearching && (
               <div className="absolute right-3 top-1/2 -translate-y-1/2">
-                <div className="animate-spin rounded-full h-4 w-4 border-2 border-green-400 border-t-transparent" />
+                <div className="animate-spin rounded-full h-4 w-4 border-2 border-emerald-400 border-t-transparent" />
               </div>
             )}
-            {showSuggestions && searchSuggestions.length > 0 && (
-              <div ref={mobileSearchPanelRef} className="absolute top-full left-0 right-0 mt-2 bg-[#0B0F14]/95 backdrop-blur-xl border border-white/10 rounded-xl shadow-2xl z-50 max-h-60 overflow-y-auto divide-y divide-white/5">
-                {searchSuggestions.map((suggestion, i) => (
-                  <button
-                    key={i}
-                    onClick={() => { setSearchQuery(suggestion); setShowSuggestions(false); performSearch(suggestion); }}
-                    className="w-full px-4 py-3 text-left hover:bg-white/5 transition-colors duration-150 flex items-center space-x-3 group"
-                  >
-                    <Search className="w-4 h-4 text-gray-500 group-hover:text-[#14B8A6]" />
-                    <span className="text-sm text-gray-200 group-hover:text-white">{suggestion}</span>
-                  </button>
-                ))}
-              </div>
-            )}
-          </div>
-        </div>
-        {/* Desktop Header */}
-          <div className="hidden md:flex items-center justify-between">
-          <div className="flex items-center space-x-4 relative">
-            <div className="flex items-center gap-3 group select-none">
-              <button onClick={() => setShowUserMenu(v=>!v)} data-user-menu-button title="Open menu" className="inline-flex items-center justify-center">
-                <img src={LOGO_URL} alt="VibeStream logo" className="w-10 h-10 rounded-lg shadow ring-1 ring-white/10 group-hover:ring-[#14B8A6]/40 transition object-contain p-0.5" />
-              </button>
-              <button onClick={() => setCurrentView('home')} title="VibeStream Home" className="text-left">
-                <span className="text-2xl font-extrabold tracking-tight bg-gradient-to-r from-[#14B8A6] to-emerald-300 bg-clip-text text-transparent">VibeStream</span>
-              </button>
-            </div>
-            {showUserMenu && (
-              <div ref={desktopUserMenuRef} className="absolute left-0 top-12 z-50 w-[380px] rounded-2xl border border-white/10 bg-[#0B0F14]/95 shadow-2xl backdrop-blur p-4 space-y-3">
-                {/* Mini header */}
-                <div className="flex items-center gap-3">
-                  <img src={LOGO_URL} alt="VibeStream" className="w-8 h-8 rounded-lg ring-1 ring-white/10 object-contain" />
-                  <div className="min-w-0">
-                    <p className="text-xs text-gray-400">Welcome back</p>
-                    <p className="text-sm font-semibold truncate">{displayName}</p>
-                  </div>
-                  {currentTrack && (
-                    <button onClick={() => setShowQueuePanel(v=>!v)} className="ml-auto text-[11px] px-2 py-1 rounded-full bg-white/5 hover:bg-white/10 text-gray-300 border border-white/10">Open Queue</button>
-                  )}
-                </div>
-                {/* Resume */}
-                {currentTrack && (
-                  <button onClick={togglePlayPause} className="w-full flex items-center gap-3 p-3 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 group">
-                    <img src={getImageUrl(currentTrack)} alt={currentTrack.name} className="w-12 h-12 rounded-lg object-cover" />
-                    <div className="min-w-0 text-left">
-                      <p className="text-sm text-white truncate">{currentTrack.name}</p>
-                      <p className="text-[11px] text-gray-400 truncate">{currentTrack.artists.primary.map(a=>a.name).join(', ')}</p>
+            {showSuggestions && (
+              <div ref={mobileSearchPanelRef} className="absolute top-full left-0 right-0 mt-2 bg-[#0B0F14]/95 backdrop-blur-xl border border-white/10 rounded-xl shadow-2xl z-50 max-h-72 overflow-y-auto">
+                {searchQuery.length < 3 && recentSearches.length > 0 && (
+                  <div className="p-3">
+                    <div className="flex items-center justify-between mb-2">
+                      <p className="text-xs text-gray-400">Recent searches</p>
+                      <button className="text-[11px] text-gray-400 hover:text-white" onClick={() => { setRecentSearches([]); try{localStorage.removeItem('vibestream_recent_searches');}catch{} }}>Clear</button>
                     </div>
-                    <span className="ml-auto inline-flex items-center gap-1 text-xs text-emerald-300">
-                      {isPlaying ? <Pause className="w-4 h-4" /> : <Play className="w-4 h-4" />} {isPlaying ? 'Pause' : 'Resume'}
-                    </span>
-                  </button>
-                )}
-                {/* Quick actions */}
-                <div className="grid grid-cols-3 gap-3">
-                  <button onClick={() => { setCurrentView('trending'); setShowUserMenu(false); }} className="p-4 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 flex flex-col items-center gap-2">
-                    <Music className="w-5 h-5 text-emerald-300" />
-                    <span className="text-xs text-gray-200">Start Mix</span>
-                  </button>
-                  <button onClick={() => { setCurrentView('playlists'); setShowUserMenu(false); }} className="p-4 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 flex flex-col items-center gap-2">
-                    <List className="w-5 h-5 text-emerald-300" />
-                    <span className="text-xs text-gray-200">Playlists</span>
-                  </button>
-                  <button onClick={() => { setCurrentView('liked'); setShowUserMenu(false); }} className="p-4 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 flex flex-col items-center gap-2">
-                    <Heart className="w-5 h-5 text-emerald-300" />
-                    <span className="text-xs text-gray-200">Liked</span>
-                  </button>
-                </div>
-                {/* Recently Played */}
-                {recentlyPlayed.length > 0 && (
-                  <div className="space-y-2">
-                    <p className="text-[11px] uppercase tracking-wide text-gray-400">Recently played</p>
-                    <div className="space-y-2">
-                      {recentlyPlayed.slice(0,4).map((t, i) => (
-                        <button key={`${t.id}-${i}`} onClick={() => { playTrack(t); setShowUserMenu(false); }} className="w-full flex items-center gap-3 px-2 py-2 rounded-lg hover:bg-white/5">
-                          <img src={getImageUrl(t)} alt={t.name} className="w-9 h-9 rounded object-cover" />
-                          <div className="min-w-0 text-left">
-                            <p className="text-sm text-white truncate">{t.name}</p>
-                            <p className="text-[11px] text-gray-400 truncate">{t.artists.primary.map(a=>a.name).join(', ')}</p>
-                          </div>
-                          <Play className="w-4 h-4 text-emerald-300 ml-auto" />
+                    <div className="flex flex-wrap gap-2">
+                      {recentSearches.map((q,i)=> (
+                        <button key={i} onClick={()=>{ setSearchQuery(q); setShowSuggestions(false); performSearch(q); }} className="px-2.5 py-1 rounded-full bg-white/5 border border-white/10 text-xs text-gray-200 hover:bg-white/10">
+                          {q}
                         </button>
                       ))}
                     </div>
                   </div>
                 )}
-                {/* CTA and Sign out */}
+                {searchSuggestions.length > 0 && (
+                  <div className="py-2">
+                    {searchSuggestions.map((s, i) => (
+                      <button
+                        key={i}
+                        onClick={() => { setSearchQuery(s); setShowSuggestions(false); performSearch(s); }}
+                        className={`w-full px-4 py-3 text-left hover:bg-white/5 transition-colors flex items-center gap-3 ${i === selectedSuggestionIndex ? 'bg-white/10' : ''}`}
+                      >
+                        <Search className="w-4 h-4 text-gray-400" />
+                        <span className="text-white">{s}</span>
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Desktop header */}
+        <div className="hidden md:flex items-center justify-between gap-4">
+          {/* Left: brand */}
+          <div className="flex items-center gap-3 select-none">
+            <img src={LOGO_URL} alt="VibeStream logo" className="w-10 h-10 rounded-lg shadow ring-1 ring-white/10 object-contain p-0.5" />
+            <div className="text-left">
+              <span className={`text-2xl font-extrabold tracking-tight bg-gradient-to-r from-[#14B8A6] to-emerald-300 bg-clip-text text-transparent inline-flex items-center`}>VibeStream</span>
+            </div>
+          </div>
+          {/* Center: search */}
+          <div className="flex-1 max-w-2xl">
+            <div className="relative">
+              <Search className={`absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 ${isSearching ? 'text-emerald-300 animate-pulse' : 'text-gray-400'}`} />
+              <Input
+                placeholder="Search for songs, artists, albums..."
+                value={searchQuery}
+                onChange={(e) => handleSearchInput(e.target.value)}
+                onKeyDown={(e) => handleSearchKeyDown(e, 'desktop')}
+                onFocus={() => searchQuery.length > 2 && setShowSuggestions(true)}
+                onBlur={() => setTimeout(() => setShowSuggestions(false), 150)}
+                className={`pl-10 w-full rounded-xl bg-white/5 border border-white/10 text-white placeholder-gray-400 focus:bg-white/10 focus:ring-2 focus:ring-[#14B8A6]/40 transition-all ${isSearching ? 'ring-2' : ''}`}
+                ref={desktopSearchInputRef}
+              />
+              {isSearching && (
+                <div className="absolute right-3 top-1/2 -translate-y-1/2">
+                  <div className="animate-spin rounded-full h-4 w-4 border-2 border-emerald-400 border-t-transparent" />
+                </div>
+              )}
+              {showSuggestions && (
+                <div ref={desktopSearchPanelRef} className="absolute top-full left-0 right-0 mt-2 bg-[#0B0F14] border border-white/10 rounded-xl shadow-2xl z-50 max-h-80 overflow-y-auto">
+                  {searchQuery.length < 3 && recentSearches.length > 0 && (
+                    <div className="p-3">
+                      <div className="flex items-center justify-between mb-2">
+                        <p className="text-xs text-gray-400">Recent searches</p>
+                        <button className="text-[11px] text-gray-400 hover:text-white" onClick={() => { setRecentSearches([]); try{localStorage.removeItem('vibestream_recent_searches');}catch{} }}>Clear</button>
+                      </div>
+                      <div className="flex flex-wrap gap-2">
+                        {recentSearches.map((q,i)=> (
+                          <button key={i} onClick={()=>{ setSearchQuery(q); setShowSuggestions(false); performSearch(q); }} className="px-2.5 py-1 rounded-full bg-white/5 border border-white/10 text-xs text-gray-200 hover:bg-white/10">
+                            {q}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                  {searchSuggestions.length > 0 && (
+                    <div className="py-2">
+                      {searchSuggestions.map((s, i) => (
+                        <button
+                          key={i}
+                          onClick={() => { setSearchQuery(s); setShowSuggestions(false); performSearch(s); }}
+                          className={`w-full px-4 py-3 text-left hover:bg-white/5 transition-colors flex items-center gap-3 ${i === selectedSuggestionIndex ? 'bg-white/10' : ''}`}
+                        >
+                          <Search className="w-4 h-4 text-gray-400" />
+                          <span className="text-white">{s}</span>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          </div>
+          {/* Right: actions */}
+          <div className="flex items-center gap-2 relative">
+            {/* Greeting chip */}
+            <span className="hidden lg:inline-flex items-center px-3 py-1 rounded-full bg-white/5 border border-white/10 text-xs text-gray-300 mr-2">Hi, {displayName.split(' ')[0] || 'Friend'}</span>
+            {currentTrack && (
+              <button onClick={() => setShowQueuePanel(v=>!v)} title="Open Queue" className="relative p-2 rounded-lg border border-white/10 text-gray-300 hover:text-white hover:bg-white/5">
+                <List className="w-5 h-5" />
+                {queue.length>0 && <span className="absolute -top-1 -right-1 bg-emerald-500 text-gray-900 text-[10px] w-4 h-4 rounded-full flex items-center justify-center font-bold">{queue.length}</span>}
+              </button>
+            )}
+            {/* Avatar */}
+            <button onClick={() => setShowUserMenu(v=>!v)} data-user-menu-button title="Account" className="inline-flex items-center justify-center w-10 h-10 rounded-full ring-1 ring-white/10 overflow-hidden bg-white/5 hover:bg-white/10">
+              {profileImageUrl ? <img src={profileImageUrl} alt="Profile" className="w-full h-full object-cover" /> : <User className="w-5 h-5 text-gray-300" />}
+            </button>
+            {showUserMenu && (
+              <div ref={desktopUserMenuRef} className="absolute right-0 top-12 z-50 w-[380px] rounded-2xl border border-white/10 bg-[#0B0F14]/95 shadow-2xl backdrop-blur p-4 space-y-3">
+                <div className="flex items-center gap-3">
+                  <img src={LOGO_URL} alt="VibeStream" className="w-7 h-7 rounded-md ring-1 ring-white/10 object-contain" />
+                  <div className="min-w-0">
+                    <p className="text-xs text-gray-400">Hey{user ? ',' : ''}</p>
+                    <p className="text-sm text-white truncate">{displayName}</p>
+                  </div>
+                </div>
+                <div className="grid grid-cols-3 gap-2">
+                  <button onClick={() => { setCurrentView('trending'); setShowUserMenu(false); }} className="p-3 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 flex flex-col items-center gap-2">
+                    <TrendingUp className="w-5 h-5 text-emerald-300" />
+                    <span className="text-[11px] text-gray-200">Trending</span>
+                  </button>
+                  <button onClick={() => { setCurrentView('playlists'); setShowUserMenu(false); }} className="p-3 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 flex flex-col items-center gap-2">
+                    <List className="w-5 h-5 text-emerald-300" />
+                    <span className="text-[11px] text-gray-200">Playlists</span>
+                  </button>
+                  <button onClick={() => { setCurrentView('liked'); setShowUserMenu(false); }} className="p-3 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 flex flex-col items-center gap-2">
+                    <Heart className="w-5 h-5 text-emerald-300" />
+                    <span className="text-[11px] text-gray-200">Liked</span>
+                  </button>
+                </div>
+                {recentlyPlayed.length > 0 && (
+                  <div className="space-y-2">
+                    <p className="text-[11px] uppercase tracking-wide text-gray-400">Recent</p>
+                    <div className="space-y-1">
+                      {recentlyPlayed.slice(0,3).map((t, i) => (
+                        <button key={`${t.id}-${i}`} onClick={() => { playTrack(t); setShowUserMenu(false); }} className="w-full flex items-center gap-3 px-2 py-1.5 rounded-lg hover:bg-white/5">
+                          <img src={getImageUrl(t)} alt={t.name} className="w-8 h-8 rounded object-cover" />
+                          <div className="min-w-0 text-left">
+                            <p className="text-xs text-white truncate">{t.name}</p>
+                            <p className="text-[10px] text-gray-400 truncate">{t.artists.primary.map(a=>a.name).join(', ')}</p>
+                          </div>
+                          <Play className="w-3.5 h-3.5 text-emerald-300 ml-auto" />
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
                 <div className="space-y-2">
                   {isGuest ? (
                     <button onClick={() => { auth.openAuthPrompt('cta'); setShowUserMenu(false); }} className="w-full py-2.5 rounded-xl bg-emerald-500 text-gray-900 font-semibold hover:bg-emerald-400 transition shadow-lg shadow-emerald-500/20">Sign in to unlock full songs</button>
@@ -1358,57 +1518,27 @@ const EnhancedMusicApp: React.FC = () => {
               </div>
             )}
           </div>
-          <div className="flex-1 max-w-md mx-8">
-            <div className="relative">
-              <Search className={`absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 transition-all duration-300 ${isSearching ? 'text-[#14B8A6] animate-pulse' : 'text-gray-400'}`} />
-              <Input
-                placeholder="Search for songs, artists, albums..."
-                value={searchQuery}
-                onChange={(e) => handleSearchInput(e.target.value)}
-                onKeyPress={(e) => e.key === 'Enter' && performSearch(searchQuery)}
-                onFocus={() => searchQuery.length > 2 && setShowSuggestions(true)}
-                onBlur={() => setTimeout(() => setShowSuggestions(false), 150)}
-                className={`pl-10 w-full rounded-xl bg-white/5 border border-white/10 text-white placeholder-gray-400 focus:bg-white/10 focus:ring-2 focus:ring-[#14B8A6]/40 transition-all duration-300 ${isSearching ? 'ring-2 ring-[#14B8A6]/50' : ''}`}
-                ref={desktopSearchInputRef}
-              />
-              {isSearching && (
-                <div className="absolute right-3 top-1/2 -translate-y-1/2">
-                  <div className="animate-spin rounded-full h-4 w-4 border-2 border-green-400 border-t-transparent" />
-                </div>
-              )}
-              {showSuggestions && searchSuggestions.length > 0 && (
-                <div ref={desktopSearchPanelRef} className="absolute top-full left-0 right-0 mt-2 bg-[#0B0F14] border border-white/10 rounded-xl shadow-2xl z-50 max-h-60 overflow-y-auto">
-                  {searchSuggestions.map((suggestion, i) => {
-                    const Icon = Search; return (
-                      <button key={i} onClick={() => { setSearchQuery(suggestion); setShowSuggestions(false); performSearch(suggestion); }} className="w-full px-4 py-3 text-left hover:bg-white/5 transition-colors duration-200 first:rounded-t-lg last:rounded-b-lg flex items-center space-x-3">
-                        <Icon className="w-4 h-4 text-gray-400" />
-                        <span className="text-white">{suggestion}</span>
-                      </button>
-                    );})}
-                </div>
-              )}
-            </div>
-          </div>
-          <div className="flex items-center space-x-4 relative"></div>
         </div>
+
+        {/* Desktop tabs underline removed to avoid duplicating sidebar navigation */}
       </header>
       {/* Layout */}
       <div className="flex flex-1 min-h-0">
-        <aside className="hidden md:block w-64 bg-gray-900 border-r border-gray-700 p-4">
-          <nav className="space-y-2">
+        <aside className="hidden md:block w-64 bg-[#0B0F14] border-r border-white/10 p-4">
+          <nav className="space-y-1">
             {sidebarItems.map(item => {
               const Icon = item.icon; return (
                 <button key={item.id} onClick={() => setCurrentView(item.id as any)}
-                  className={`w-full flex items-center space-x-3 px-3 py-2 rounded-lg text-left transition-colors ${currentView === item.id ? 'bg-gray-800 text-white' : 'text-gray-400 hover:text-white hover:bg-gray-800'}`}> 
+                  className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-left transition-all border ${currentView === item.id ? 'bg-white/10 border-white/15 text-white' : 'bg-white/0 border-white/5 text-gray-300 hover:text-white hover:bg-white/5'}`}> 
                   <Icon className="w-5 h-5" /> <span className="font-medium">{item.label}</span>
                 </button>
               );})}
           </nav>
-          <div className="mt-8">
-            <h3 className="text-gray-400 text-sm font-semibold uppercase tracking-wide mb-4">My Library</h3>
-            <nav className="space-y-2">
+          <div className="mt-6">
+            <h3 className="text-gray-400 text-[11px] font-semibold uppercase tracking-wide mb-3 px-1">My Library</h3>
+            <nav className="space-y-1">
               {libraryItems.map(item => { const Icon = item.icon; return (
-                <button key={item.id} onClick={() => setCurrentView(item.id as any)} className="w-full flex items-center space-x-3 px-3 py-2 rounded-lg text-left transition-colors text-gray-400 hover:text-white hover:bg-gray-800">
+                <button key={item.id} onClick={() => setCurrentView(item.id as any)} className="w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-left transition-all border bg-white/0 border-white/5 text-gray-300 hover:text-white hover:bg-white/5">
                   <Icon className="w-5 h-5" /> <span className="font-medium">{item.label}</span>
                 </button>
               );})}
@@ -1437,68 +1567,46 @@ const EnhancedMusicApp: React.FC = () => {
           </div>
         </div>
       )}
-      {/* Bottom Player */}
+      {/* Bottom Player - Premium */}
       {currentTrack && (
-        <div className="bg-gray-900/95 md:bg-gradient-to-r md:from-gray-800 md:via-gray-850 md:to-gray-800 border-t border-gray-700 px-4 py-4 shadow-2xl md:static fixed bottom-12 left-0 right-0 z-40" style={{ backdropFilter: 'blur(12px)' }}>
-          <div className="hidden md:block absolute inset-0 opacity-30 pointer-events-none overflow-hidden rounded-none">
-            <img src={getImageUrl(currentTrack)} alt="bg" className="w-full h-full object-cover blur-2xl scale-110" />
-            <div className="absolute inset-0 bg-gradient-to-r from-gray-900/90 via-gray-900/80 to-gray-900/90" />
-          </div>
-          <div className="absolute top-0 left-0 right-0 h-1 bg-gray-700/60 cursor-pointer group" onClick={handleProgressBarClick}>
-            <div className="h-full bg-gradient-to-r from-green-400 via-emerald-400 to-green-500 relative" style={{ width: `${progress[0]}%` }}>
-              <div className="absolute -top-1 -right-1 w-3 h-3 rounded-full bg-green-400 shadow ring-2 ring-gray-900/70 group-hover:scale-110 transition-transform" />
-            </div>
-          </div>
-          <div className="relative flex items-center justify-between">
-            {/* Left */}
-            <div className="flex items-center space-x-4 flex-1 min-w-0 md:pr-4" style={{ flexBasis: '32%' }}>
-              <div className="relative group">
-                <img src={getImageUrl(currentTrack)} alt={currentTrack.name} className="w-14 h-14 md:w-16 md:h-16 rounded-lg object-cover shadow-lg ring-2 ring-gray-700 group-hover:ring-green-500 transition-all duration-300" />
-                <div className="absolute inset-0 bg-black/20 rounded-lg opacity-0 group-hover:opacity-100 transition-opacity" />
-                {isPlaying && (
-                  <div className="absolute bottom-1 left-1 right-1 flex items-end gap-0.5 h-3 opacity-80">
-                    {[2,4,3,5].map((h,i)=>(<span key={i} className="flex-1 bg-green-400 rounded-sm animate-pulse" style={{ animationDelay: `${i*120}ms`, height: `${h*4}px`}} />))}
-                  </div>
-                )}
-              </div>
-              <div className="min-w-0">
-                <h4 className="font-semibold text-white truncate text-sm md:text-lg">{currentTrack.name}</h4>
-                <p className="text-gray-300 text-[11px] md:text-sm truncate">{currentTrack.artists.primary.map((a:any)=>a.name).join(', ')}</p>
-                {queue[currentIndex + 1] && <p className="hidden md:block text-[11px] text-gray-500 truncate mt-0.5">Next: {queue[currentIndex + 1].name}</p>}
-              </div>
-              <Button variant="ghost" size="sm" onClick={gatedToggleFavorite} className={`hover:scale-110 transition-all duration-200 ${isFavorite ? 'text-red-400' : 'text-gray-400 hover:text-red-400'}`} title={isFavorite ? 'Remove from favorites' : 'Add to favorites'}>
-                <Heart className="w-5 h-5" fill={isFavorite ? 'currentColor' : 'none'} />
-              </Button>
-            </div>
-            {/* Center */}
-            <div className="flex flex-col items-center space-y-2 md:space-y-3 px-2" style={{ flexBasis: '36%' }}>
-              <div className="flex items-center space-x-4 md:space-x-6">
-                <Button variant="ghost" size="sm" onClick={() => setIsShuffled(!isShuffled)} className={`${isShuffled ? 'text-green-400 bg-green-400/20' : 'text-gray-300'} hover:scale-110 transition-all duration-200 p-3 rounded-full`} title="Shuffle"><Shuffle className="w-5 h-5" /></Button>
-                <Button variant="ghost" size="sm" onClick={skipPrevious} className="text-gray-300 hover:text-white hover:scale-110 transition-all duration-200 p-3 rounded-full" title="Previous"><SkipBack className="w-6 h-6" /></Button>
-                <Button onClick={togglePlayPause} variant="green" className="w-14 h-14 rounded-full shadow-lg hover:shadow-green-500/25 hover:scale-105 transition-all duration-200 ring-2 ring-green-500/30" disabled={isLoading} title={isPlaying ? 'Pause' : 'Play'}>
-                  {isLoading ? <div className="w-6 h-6 border-3 border-white border-t-transparent rounded-full animate-spin" /> : isPlaying ? <Pause className="w-6 h-6" fill="white" /> : <Play className="w-6 h-6" fill="white" />}
-                </Button>
-                <Button variant="ghost" size="sm" onClick={skipNext} className="text-gray-300 hover:text-white hover:scale-110 transition-all duration-200 p-3 rounded-full" title="Next"><SkipForward className="w-6 h-6" /></Button>
-                <Button variant="ghost" size="sm" onClick={() => setRepeatMode((prev)=>(prev+1)%3)} className={`${repeatMode>0?'text-green-400 bg-green-400/20':'text-gray-300'} hover:scale-110 transition-all duration-200 p-3 rounded-full relative`} title={`Repeat ${repeatMode===0?'Off':repeatMode===1?'All':'One'}`}><Repeat className="w-5 h-5" />{repeatMode===2 && <span className="absolute -top-1 -right-1 bg-green-400 text-gray-900 text-xs w-4 h-4 rounded-full flex items-center justify-center font-bold">1</span>}</Button>
-                <Button variant="ghost" size="sm" onClick={cyclePlaybackSpeed} className="text-gray-300 hover:text-white hover:scale-105 transition-all duration-200 px-3 py-2 rounded-full" title="Playback Speed"><span className="text-xs font-semibold">{playbackSpeed}x</span></Button>
-              </div>
-              <div className="hidden md:flex w-full items-center space-x-4">
-                <span className="text-sm text-gray-300 w-12 text-right font-mono">{formatTime(currentTime)}</span>
-                <div className="flex-1 group"><Slider value={progress} onValueChange={handleProgressChange} max={100} step={0.1} className="flex-1" /></div>
-                <span className="text-sm text-gray-300 w-12 font-mono">{formatTime(duration)}</span>
-              </div>
-            </div>
-            {/* Right */}
-            <div className="flex items-center space-x-4 justify-end" style={{ flexBasis: '32%' }}>
-              <Button variant="ghost" size="sm" onClick={() => setShowQueuePanel(p=>!p)} className={`relative ${showQueuePanel?'text-green-400 bg-green-400/20':'text-gray-400 hover:text-white'} hover:scale-110 transition-all duration-200`} title="Queue"><List className="w-5 h-5" />{queue.length>0 && <span className="absolute -top-1 -right-1 bg-green-500 text-gray-900 text-[10px] w-4 h-4 rounded-full flex items-center justify-center font-bold">{queue.length}</span>}</Button>
-              <div className="hidden md:flex items-center space-x-3">
-                <Volume2 className="w-5 h-5 text-gray-300" />
-                <div className="w-28 group"><Slider value={volume} onValueChange={handleVolumeChange} max={100} step={1} className="w-full" /></div>
-                <span className="text-xs text-gray-400 w-8 text-center">{volume[0]}</span>
-              </div>
-            </div>
-          </div>
-        </div>
+        <PremiumPlayer
+          artworkUrl={getImageUrl(currentTrack)}
+          title={currentTrack.name}
+          subtitle={currentTrack.artists.primary.map((a:any)=>a.name).join(', ')}
+          nextTitle={queue[currentIndex + 1]?.name}
+          isPlaying={isPlaying}
+          isLoading={isLoading}
+          progressPercent={progress[0] || 0}
+          currentTimeLabel={formatTime(currentTime)}
+          durationLabel={formatTime(duration)}
+          queueCount={queue.length}
+          volumePercent={volume[0]}
+          isMuted={isMuted}
+          isShuffled={isShuffled}
+          repeatMode={repeatMode as any}
+          playbackSpeed={playbackSpeed}
+          isFavorite={isFavorite}
+          aPoint={loopA}
+          bPoint={loopB}
+          sleepMinutesLeft={sleepUntil ? Math.max(0, Math.ceil((sleepUntil - Date.now()) / 60000)) : null}
+          onPlayPause={togglePlayPause}
+          onPrev={skipPrevious}
+          onNext={skipNext}
+          onSeekPercent={(pct)=>handleProgressChange([pct])}
+          onSeekBy={seekBySeconds}
+          onToggleShuffle={()=>setIsShuffled(!isShuffled)}
+          onToggleRepeat={()=>setRepeatMode((prev)=>(prev+1)%3)}
+          onCycleSpeed={cyclePlaybackSpeed}
+          onToggleFavorite={gatedToggleFavorite}
+          onOpenQueue={()=>setShowQueuePanel(p=>!p)}
+          onVolumeChange={(p)=>handleVolumeChange([p])}
+          onToggleMute={toggleMute}
+          onMarkA={()=> setLoopA(currentTime)}
+          onMarkB={()=> setLoopB(currentTime)}
+          onClearAB={()=> { setLoopA(null); setLoopB(null);} }
+          onSetSleep={setSleepMinutes}
+          onCancelSleep={cancelSleep}
+        />
       )}
       {/* Mobile Bottom Navigation */}
       <nav className="md:hidden fixed bottom-0 left-0 right-0 h-12 bg-gray-800/95 border-t border-gray-700 flex items-stretch justify-around z-40 backdrop-blur-sm">
