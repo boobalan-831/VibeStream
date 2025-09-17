@@ -100,8 +100,9 @@ class EnhancedMusicService {
     }
   }
 
-  async getHomePageModules(): Promise<SaavnModulesResponse> {
-    const cacheKey = this.getCacheKey('modules', { language: 'english,hindi' });
+  async getHomePageModules(languages: string[] = ['english', 'hindi']): Promise<SaavnModulesResponse> {
+    const langCsv = (languages && languages.length > 0 ? languages : ['english','hindi']).join(',');
+    const cacheKey = this.getCacheKey('modules', { language: langCsv });
     const cached = this.getFromCache(cacheKey);
     if (cached) {
       console.log('🔄 Using cached home page modules');
@@ -110,7 +111,7 @@ class EnhancedMusicService {
 
     try {
       console.log('🔥 Fetching home page modules...');
-      const url = `${this.baseUrl}/modules?language=english,hindi`;
+      const url = `${this.baseUrl}/modules?language=${encodeURIComponent(langCsv)}`;
       const response = await fetch(url);
       
       if (!response.ok) {
@@ -120,7 +121,7 @@ class EnhancedMusicService {
       const data: SaavnModulesResponse = await response.json();
       
       if (data.success) {
-        console.log(`✅ Loaded home page modules`);
+  console.log(`✅ Loaded home page modules for languages: ${langCsv}`);
         this.setCache(cacheKey, data);
         return data;
       } else {

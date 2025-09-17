@@ -7,6 +7,7 @@ export type Profile = {
   avatar_url?: string | null;
   locale?: string | null;
   onboarding_complete?: boolean | null;
+  music_languages?: string[] | null;
 };
 
 export async function getProfile(userId: string) {
@@ -28,4 +29,13 @@ export async function saveProfile(userId: string, data: Partial<Profile>) {
     .upsert({ user_id: userId, ...data }, { onConflict: 'user_id' })
     .select()
     .single<Profile>();
+}
+
+export async function savePreferredLanguages(userId: string, langs: string[]) {
+  return saveProfile(userId, { music_languages: langs });
+}
+
+export async function getPreferredLanguages(userId: string): Promise<string[] | null> {
+  const { data } = await getProfile(userId);
+  return (data?.music_languages as string[] | null) ?? null;
 }

@@ -21,6 +21,8 @@ import {
 import { useVibeStream } from '../context/VibeStreamContext';
 import { useAuth } from '../context/AuthContext';
 import { enhancedMusicService, SaavnTrack } from '../services/enhancedMusicService';
+import { upsertTrack as dbUpsertTrack, logRecentlyPlayed, likeTrack as dbLikeTrack, unlikeTrack as dbUnlikeTrack, recommendTracks, rebuildArtistCounts, fromDbTrack, getLikedTracksWithMeta, getRecentlyPlayedWithMeta, savePlaybackState, getPlaybackState, toTrackId } from '../services/dbService';
+import { getPreferredLanguages, savePreferredLanguages } from '../services/profileService';
 import TopPlaylists from './TopPlaylists';
 import PremiumPlayer from './PremiumPlayer';
 // Auth gating is handled in App root; no login/register modals here
@@ -159,6 +161,10 @@ const EnhancedMusicApp: React.FC = () => {
   const [hoverX, setHoverX] = useState(0);
   // User menu state
   const [showUserMenu, setShowUserMenu] = useState(false);
+  // Preferences
+  const [preferredLanguages, setPreferredLanguages] = useState<string[]>([]);
+  // Continue listening (last saved)
+  const [resumeState, setResumeState] = useState<{ track: AppTrack; position: number } | null>(null);
   
   // Prefer user profile image if available, otherwise fallback to app logo (no longer used in header avatar)
   const profileImageUrl = (user as any)?.user_metadata?.avatar_url || (user as any)?.user_metadata?.picture || null;
@@ -204,8 +210,37 @@ const EnhancedMusicApp: React.FC = () => {
       if (likedRaw) { const parsed = JSON.parse(likedRaw); if(Array.isArray(parsed)) setLikedTracks(parsed); }
       const recentRaw = localStorage.getItem('vibestream_recent');
       if (recentRaw) { const parsedR = JSON.parse(recentRaw); if(Array.isArray(parsedR)) setRecentlyPlayed(parsedR); }
+      const langsRaw = localStorage.getItem('vibestream_langs');
+      if (langsRaw) { const parsedL = JSON.parse(langsRaw); if (Array.isArray(parsedL)) setPreferredLanguages(parsedL); }
     } catch(e) { console.warn('persist load fail', e); }
   }, []);
+
+    // Local fallback hydration (for guests)
+    // Authenticated hydration from Supabase
+    useEffect(() => {
+      let ignore = false;
+      (async () => {
+        if (!user?.id) return; // keep local fallback for guests
+        try {
+          const [likedRows, recentRows] = await Promise.all([
+            getLikedTracksWithMeta(user.id, 200),
+            getRecentlyPlayedWithMeta(user.id, 100),
+          ]);
+          if (ignore) return;
+          const liked = likedRows
+            .map((r) => fromDbTrack(r.tracks))
+            .filter(Boolean);
+          const recent = recentRows
+            .map((r) => fromDbTrack(r.tracks))
+            .filter(Boolean);
+          setLikedTracks(liked as AppTrack[]);
+          setRecentlyPlayed(recent as AppTrack[]);
+        } catch (e) {
+          console.warn('⚠️ Failed to hydrate from Supabase; using local fallback', e);
+        }
+      })();
+      return () => { ignore = true; };
+    }, [user?.id]);
 
   // Track page scroll progress for a subtle header progress line
   useEffect(() => {
@@ -243,6 +278,27 @@ const EnhancedMusicApp: React.FC = () => {
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, [showUserMenu, showSuggestions]);
 
+  // If authenticated, fetch preferred languages from profile
+  useEffect(() => {
+    let ignore = false;
+    (async () => {
+      if (!user?.id) return;
+      try {
+        const langs = await getPreferredLanguages(user.id);
+        if (!ignore && langs && Array.isArray(langs) && langs.length > 0) {
+          setPreferredLanguages(langs);
+        }
+      } catch {}
+    })();
+    return () => { ignore = true; };
+  }, [user?.id]);
+
+  // Reload home categories when preferred languages change
+  useEffect(() => {
+    loadHomeCategories(preferredLanguages);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [preferredLanguages.join(',')]);
+
   useEffect(()=>{ try { localStorage.setItem('vibestream_liked', JSON.stringify(likedTracks.slice(0,200))); } catch{} }, [likedTracks]);
   useEffect(()=>{ try { localStorage.setItem('vibestream_recent', JSON.stringify(recentlyPlayed.slice(0,100))); } catch{} }, [recentlyPlayed]);
   useEffect(()=>{ if(currentTrack) setIsFavorite(likedTracks.some(t=>t.id===currentTrack.id)); else setIsFavorite(false); }, [currentTrack, likedTracks]);
@@ -266,25 +322,27 @@ const EnhancedMusicApp: React.FC = () => {
     }
   };
 
-  // Load home page categories using your exact logic
-  const loadHomeCategories = async () => {
+  // Load home page categories personalized by preferred languages
+  const loadHomeCategories = async (langs: string[] | null = null) => {
     try {
-      const [trendingResponse, rotationResponse] = await Promise.all([
-        fetch('https://saavn.dev/api/search/songs?query=trending'),
-        fetch('https://saavn.dev/api/search/songs?query=popular')
+      const languages = (langs ?? preferredLanguages);
+      // Fallback defaults if none selected
+      const effective = languages && languages.length > 0 ? languages : ['english','hindi'];
+      const modules = await enhancedMusicService.getHomePageModules(effective);
+      const trendingTracks = modules.data?.trending?.songs || [];
+      // For viral/top charts, keep simple fallbacks using search, but could be refined later
+      const [viralResp, topResp] = await Promise.all([
+        fetch(`https://saavn.dev/api/search/songs?query=viral&limit=6`),
+        fetch(`https://saavn.dev/api/search/songs?query=top%20hits&limit=9`)
       ]);
-      
-      const trendingData = await trendingResponse.json();
-      const rotationData = await rotationResponse.json();
-      
-      const trendingTracks = trendingData.data.results || [];
-      const heavyRotation = rotationData.data.results || [];
-      
+      const viralData = await viralResp.json();
+      const topData = await topResp.json();
+      const heavyRotation = viralData?.data?.results || [];
+      const topTracks = topData?.data?.results || [];
       setMadeForYou(trendingTracks.slice(0, 6));
       setViralSongs(heavyRotation.slice(0, 6));
-      setTopCharts([...trendingTracks.slice(6, 9), ...heavyRotation.slice(6, 9)]);
-      
-      console.log('✅ Home categories loaded successfully');
+      setTopCharts(topTracks.slice(0, 9));
+      console.log('✅ Home categories loaded for languages:', effective.join(','));
     } catch (error) {
       console.error('Failed to load home categories:', error);
     }
@@ -377,7 +435,7 @@ const EnhancedMusicApp: React.FC = () => {
   };
 
   // Play a track
-  const playTrack = async (track: AppTrack) => {
+  const playTrack = async (track: AppTrack, opts?: { startAtSeconds?: number }) => {
     if (!audioRef.current) return;
     
     console.log(`🎵 Playing track: ${track.name} by ${track.artists.primary.map(a => a.name).join(', ')}`);
@@ -425,10 +483,24 @@ const EnhancedMusicApp: React.FC = () => {
           audioRef.current.addEventListener('error', onError);
         });
 
+        // Seek to position if provided
+        if (opts?.startAtSeconds && !isNaN(opts.startAtSeconds)) {
+          audioRef.current.currentTime = Math.max(0, opts.startAtSeconds);
+        }
         await audioRef.current.play();
         setIsPlaying(true);
         setRecentlyPlayed(prev=>{const filtered=prev.filter(t=>t.id!==track.id); return [track,...filtered].slice(0,50);});
         console.log('✅ Track started playing');
+
+        // Persist to Supabase (authenticated users)
+        try {
+          if (user?.id) {
+            const dbId = await dbUpsertTrack(track);
+            await logRecentlyPlayed(user.id, dbId, Math.floor(audioRef.current.currentTime || 0), 'web');
+          }
+        } catch (persistErr) {
+          console.warn('⚠️ Failed to persist play to Supabase', persistErr);
+        }
 
         // Guest preview gating: limit playback to previewLimitSeconds
         if (isGuest && previewLimitSeconds > 0) {
@@ -577,6 +649,46 @@ const EnhancedMusicApp: React.FC = () => {
     };
   }, [currentTrack, repeatMode]);
 
+  // Persist playback position periodically (throttled) for authenticated users
+  useEffect(() => {
+    const audio = audioRef.current;
+    if (!audio || !user?.id || !currentTrack) return;
+    let lastSaved = 0;
+    const onTime = () => {
+      const now = Date.now();
+      if (now - lastSaved < 8000) return; // throttle 8s
+      lastSaved = now;
+      const pos = Math.floor(audio.currentTime || 0);
+      const dbId = toTrackId(currentTrack.id);
+      savePlaybackState(user.id!, dbId, pos).catch(() => {});
+    };
+    audio.addEventListener('timeupdate', onTime);
+    return () => audio.removeEventListener('timeupdate', onTime);
+  }, [user?.id, currentTrack?.id]);
+
+  // Load last playback state (continue listening)
+  useEffect(() => {
+    let ignore = false;
+    (async () => {
+      if (!user?.id) { setResumeState(null); return; }
+      try {
+        const state = await getPlaybackState(user.id);
+        if (!state || !state.track_id) { if(!ignore) setResumeState(null); return; }
+        const saavnId = state.track_id.startsWith('saavn:') ? state.track_id.slice(6) : state.track_id;
+        // Get song details to construct UI track
+        const details = await enhancedMusicService.getSongDetails(saavnId);
+        const tr = details?.data as any as AppTrack | null;
+        if (tr && !ignore) {
+          setResumeState({ track: tr, position: state.position_seconds ?? 0 });
+        }
+      } catch (e) {
+        console.warn('Failed to load playback state', e);
+        if (!ignore) setResumeState(null);
+      }
+    })();
+    return () => { ignore = true; };
+  }, [user?.id]);
+
   // Handle progress change
   const handleProgressChange = (value: number[]) => {
     if (!audioRef.current || !duration) return;
@@ -669,7 +781,21 @@ const EnhancedMusicApp: React.FC = () => {
   }, [loopA, loopB]);
 
   // Toggle favorite (local visual only)
-  const toggleFavorite = () => { if(!currentTrack) return; setLikedTracks(prev=>{ const exists = prev.find(t=>t.id===currentTrack.id); return exists? prev.filter(t=>t.id!==currentTrack.id): [currentTrack, ...prev.filter(t=>t.id!==currentTrack.id)].slice(0,200);}); setIsFavorite(p=>!p); };
+  const toggleFavorite = async () => {
+    if(!currentTrack) return;
+    const willLike = !likedTracks.some(t=>t.id===currentTrack.id);
+    // Optimistic UI update
+    setLikedTracks(prev=>{ const exists = prev.find(t=>t.id===currentTrack.id); return exists? prev.filter(t=>t.id!==currentTrack.id): [currentTrack!, ...prev.filter(t=>t.id!==currentTrack!.id)].slice(0,200);});
+    setIsFavorite(p=>!p);
+    // Sync with Supabase if authenticated
+    if (!user?.id) return;
+    try {
+      const dbId = await dbUpsertTrack(currentTrack);
+      if (willLike) await dbLikeTrack(user.id, dbId); else await dbUnlikeTrack(user.id, dbId);
+    } catch (e) {
+      console.warn('⚠️ Failed to sync favorite with Supabase', e);
+    }
+  };
   // Gate favorites for guests
   const gatedToggleFavorite = () => {
     if (isGuest) {
@@ -723,6 +849,24 @@ const EnhancedMusicApp: React.FC = () => {
     { id: 'liked', label: 'Liked Songs', icon: Heart },
     { id: 'queue', label: 'Playback Queue', icon: List },
   ];
+
+  // Recommended tracks (from Supabase)
+  const [recommended, setRecommended] = useState<AppTrack[]>([]);
+  useEffect(() => {
+    let ignore = false;
+    (async () => {
+      if (!user?.id) { setRecommended([]); return; }
+      try {
+        await rebuildArtistCounts(user.id);
+        const rows = await recommendTracks(user.id);
+        if (!ignore) setRecommended((rows as any[]).map((r:any) => fromDbTrack(r)));
+      } catch (e) {
+        console.warn('⚠️ Failed to load recommendations', e);
+        if (!ignore) setRecommended([]);
+      }
+    })();
+    return () => { ignore = true; };
+  }, [user?.id]);
 
   // Render main content based on current view
   const handlePlayPlaylist = async (playlist: any) => {
@@ -1101,6 +1245,33 @@ const EnhancedMusicApp: React.FC = () => {
               <p className="text-gray-300">Discover your new favorite music</p>
             </section>
 
+            {/* Continue Listening */}
+            {user && resumeState && (
+              <section>
+                <div className="flex items-center justify-between mb-3">
+                  <h2 className="text-2xl font-bold text-white">⏯️ Continue Listening</h2>
+                </div>
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                  <Card 
+                    className="p-4 hover:bg-gray-750 transition-all duration-300 cursor-pointer group bg-gradient-to-b from-emerald-900/20 to-gray-900/80 border border-emerald-700/30"
+                    onClick={() => playTrack(resumeState.track, { startAtSeconds: resumeState.position })}
+                  >
+                    <div className="flex items-center gap-4">
+                      <img src={getImageUrl(resumeState.track)} alt={resumeState.track.name} className="w-20 h-20 rounded-lg object-cover" />
+                      <div className="min-w-0 flex-1">
+                        <h3 className="font-semibold text-white truncate">{resumeState.track.name}</h3>
+                        <p className="text-gray-400 text-sm truncate">{resumeState.track.artists.primary.map(a=>a.name).join(', ')}</p>
+                        <p className="text-gray-500 text-xs mt-1">Resume at {formatTime(resumeState.position)}</p>
+                      </div>
+                      <Button variant="green" size="sm" className="rounded-full">
+                        <Play className="w-4 h-4" />
+                      </Button>
+                    </div>
+                  </Card>
+                </div>
+              </section>
+            )}
+
             {/* Loading State */}
             {madeForYou.length === 0 && viralSongs.length === 0 && topCharts.length === 0 && (
               <section>
@@ -1249,6 +1420,45 @@ const EnhancedMusicApp: React.FC = () => {
                         </div>
                         <div className="opacity-0 group-hover:opacity-100 transition-opacity">
                           <span className="text-yellow-400 font-medium text-sm">▶ Play</span>
+                        </div>
+                      </div>
+                    </Card>
+                  ))}
+                </div>
+              </section>
+            )}
+
+            {/* Recommended For You (Supabase) */}
+            {user && recommended.length > 0 && (
+              <section>
+                <div className="flex items-center justify-between mb-6">
+                  <h2 className="text-2xl font-bold text-white">✨ Recommended For You</h2>
+                </div>
+                <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
+                  {recommended.map((track) => (
+                    <Card 
+                      key={`rec-${track.id}`}
+                      className="p-3 hover:bg-gray-750 transition-all duration-300 cursor-pointer group bg-gradient-to-b from-emerald-900/20 to-gray-900/80 border border-emerald-700/30"
+                      onClick={() => playTrack(track)}
+                    >
+                      <div className="space-y-3">
+                        <div className="relative aspect-square overflow-hidden rounded-lg">
+                          <img
+                            src={getImageUrl(track)}
+                            alt={track.name}
+                            className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
+                          />
+                          <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-all duration-300 flex items-center justify-center">
+                            <div className="bg-emerald-500 rounded-full p-3 shadow-lg transform scale-0 group-hover:scale-100 transition-transform duration-300">
+                              <Play className="w-4 h-4 text-white" fill="white" />
+                            </div>
+                          </div>
+                        </div>
+                        <div>
+                          <h3 className="font-semibold text-white truncate text-sm">{track.name}</h3>
+                          <p className="text-gray-400 text-xs truncate">
+                            {track.artists.primary.map((artist: any) => artist.name).join(', ')}
+                          </p>
                         </div>
                       </div>
                     </Card>
@@ -1487,6 +1697,46 @@ const EnhancedMusicApp: React.FC = () => {
                     <Heart className="w-5 h-5 text-emerald-300" />
                     <span className="text-[11px] text-gray-200">Liked</span>
                   </button>
+                </div>
+                {/* Language preferences */}
+                <div className="space-y-2">
+                  <p className="text-[11px] uppercase tracking-wide text-gray-400">Music languages</p>
+                  <div className="flex flex-wrap gap-2">
+                    {['english','hindi','tamil','telugu','punjabi','bengali','kannada','marathi','malayalam','gujarati'].map(lang => {
+                      const active = preferredLanguages.includes(lang);
+                      return (
+                        <button
+                          key={lang}
+                          onClick={async () => {
+                            setPreferredLanguages(prev => {
+                              const next = prev.includes(lang) ? prev.filter(l=>l!==lang) : [...prev, lang];
+                              try { localStorage.setItem('vibestream_langs', JSON.stringify(next)); } catch {}
+                              return next;
+                            });
+                          }}
+                          className={`px-2.5 py-1 rounded-full border text-xs ${active ? 'bg-emerald-500/20 border-emerald-500/40 text-emerald-300' : 'bg-white/5 border-white/10 text-gray-200 hover:bg-white/10'}`}
+                        >
+                          {lang.charAt(0).toUpperCase() + lang.slice(1)}
+                        </button>
+                      );
+                    })}
+                  </div>
+                  {user && (
+                    <button
+                      onClick={async () => {
+                        const langs = preferredLanguages;
+                        try {
+                          await savePreferredLanguages(user.id, langs);
+                          // reload home modules using selected langs
+                          await loadHomeCategories(langs);
+                        } catch {}
+                        setShowUserMenu(false);
+                      }}
+                      className="mt-2 w-full py-2 rounded-lg bg-white/5 hover:bg-white/10 border border-white/10 text-sm"
+                    >
+                      Save preferences
+                    </button>
+                  )}
                 </div>
                 {recentlyPlayed.length > 0 && (
                   <div className="space-y-2">
