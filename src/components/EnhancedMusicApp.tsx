@@ -16,7 +16,8 @@ import {
   List,
   User,
   Settings,
-  X
+  X,
+  Check
 } from 'lucide-react';
 import { useVibeStream } from '../context/VibeStreamContext';
 import { useAuth } from '../context/AuthContext';
@@ -162,7 +163,10 @@ const EnhancedMusicApp: React.FC = () => {
   // User menu state
   const [showUserMenu, setShowUserMenu] = useState(false);
   // Preferences
-  const [preferredLanguages, setPreferredLanguages] = useState<string[]>([]);
+  const [preferredLanguages, setPreferredLanguages] = useState<string[]>([]); // committed (saved / active personalization)
+  const [pendingLanguages, setPendingLanguages] = useState<string[]>([]); // editing buffer until Apply
+  const [isSavingPrefs, setIsSavingPrefs] = useState(false);
+  const [savedPrefsAt, setSavedPrefsAt] = useState<number | null>(null);
   // Continue listening (last saved)
   const [resumeState, setResumeState] = useState<{ track: AppTrack; position: number } | null>(null);
   
@@ -211,9 +215,17 @@ const EnhancedMusicApp: React.FC = () => {
       const recentRaw = localStorage.getItem('vibestream_recent');
       if (recentRaw) { const parsedR = JSON.parse(recentRaw); if(Array.isArray(parsedR)) setRecentlyPlayed(parsedR); }
       const langsRaw = localStorage.getItem('vibestream_langs');
-      if (langsRaw) { const parsedL = JSON.parse(langsRaw); if (Array.isArray(parsedL)) setPreferredLanguages(parsedL); }
+  if (langsRaw) { const parsedL = JSON.parse(langsRaw); if (Array.isArray(parsedL)) { setPreferredLanguages(parsedL); setPendingLanguages(parsedL); } }
     } catch(e) { console.warn('persist load fail', e); }
   }, []);
+
+  // Reload trending songs when preferred languages change
+  useEffect(() => {
+    if (preferredLanguages.length > 0) {
+      loadTrendingSongs();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [preferredLanguages.join(',')]);
 
     // Local fallback hydration (for guests)
     // Authenticated hydration from Supabase
@@ -242,6 +254,22 @@ const EnhancedMusicApp: React.FC = () => {
       return () => { ignore = true; };
     }, [user?.id]);
 
+  // If authenticated, fetch preferred languages from profile
+  useEffect(() => {
+    let ignore = false;
+    (async () => {
+      if (!user?.id) return;
+      try {
+        const langs = await getPreferredLanguages(user.id);
+        if (!ignore && langs && Array.isArray(langs) && langs.length > 0) {
+          setPreferredLanguages(langs);
+          setPendingLanguages(langs);
+        }
+      } catch {}
+    })();
+    return () => { ignore = true; };
+  }, [user?.id]);
+
   // Track page scroll progress for a subtle header progress line
   useEffect(() => {
     const onScroll = () => {
@@ -263,6 +291,7 @@ const EnhancedMusicApp: React.FC = () => {
       const menuButtonClicked = (target as HTMLElement)?.closest?.('[data-user-menu-button]');
       const inDesktopMenu = desktopUserMenuRef.current?.contains(target);
       const inMobileMenu = mobileUserMenuRef.current?.contains(target);
+      // Only close if click is outside menu AND not on menu button
       if (!menuButtonClicked && !inDesktopMenu && !inMobileMenu && showUserMenu) {
         setShowUserMenu(false);
       }
@@ -287,6 +316,7 @@ const EnhancedMusicApp: React.FC = () => {
         const langs = await getPreferredLanguages(user.id);
         if (!ignore && langs && Array.isArray(langs) && langs.length > 0) {
           setPreferredLanguages(langs);
+          setPendingLanguages(langs);
         }
       } catch {}
     })();
@@ -303,19 +333,38 @@ const EnhancedMusicApp: React.FC = () => {
   useEffect(()=>{ try { localStorage.setItem('vibestream_recent', JSON.stringify(recentlyPlayed.slice(0,100))); } catch{} }, [recentlyPlayed]);
   useEffect(()=>{ if(currentTrack) setIsFavorite(likedTracks.some(t=>t.id===currentTrack.id)); else setIsFavorite(false); }, [currentTrack, likedTracks]);
 
-  // Load trending songs using fetch API - EXACTLY as you specified
+  // Load trending songs using fetch API - with language filtering
   const loadTrendingSongs = async () => {
     try {
+      const effective = preferredLanguages && preferredLanguages.length > 0 ? preferredLanguages : ['english','hindi'];
+      
       const [trendingResponse, rotationResponse] = await Promise.all([
-        fetch('https://saavn.dev/api/search/songs?query=trending'),
-        fetch('https://saavn.dev/api/search/songs?query=popular')
+        fetch('https://saavn.dev/api/search/songs?query=trending&limit=40'),
+        fetch('https://saavn.dev/api/search/songs?query=popular&limit=40')
       ]);
       
       const trendingData = await trendingResponse.json();
       const rotationData = await rotationResponse.json();
       
-      setTrendingSongs(trendingData.data.results || []);
-      console.log(`✅ Loaded ${(trendingData.data.results || []).length} trending songs`);
+      let allTracks = [...(trendingData.data.results || []), ...(rotationData.data.results || [])];
+      
+      // Filter by language and dedupe
+      const seenIds = new Set<string>();
+      allTracks = allTracks.filter((track: any) => {
+        if (seenIds.has(track.id)) return false;
+        seenIds.add(track.id);
+        
+        const trackLang = track.language?.toLowerCase();
+        if (trackLang && effective.length > 0) {
+          return effective.some(lang => 
+            trackLang.includes(lang.toLowerCase()) || lang.toLowerCase().includes(trackLang)
+          );
+        }
+        return true; // Keep tracks without language info
+      });
+      
+      setTrendingSongs(allTracks.slice(0, 20));
+      console.log(`✅ Loaded ${allTracks.length} trending songs for languages: ${effective.join(',')}`);
     } catch (error) {
       console.error('Failed to load trending songs:', error);
       setTrendingSongs([]);
@@ -330,15 +379,36 @@ const EnhancedMusicApp: React.FC = () => {
       const effective = languages && languages.length > 0 ? languages : ['english','hindi'];
       const modules = await enhancedMusicService.getHomePageModules(effective);
       const trendingTracks = modules.data?.trending?.songs || [];
-      // For viral/top charts, keep simple fallbacks using search, but could be refined later
-      const [viralResp, topResp] = await Promise.all([
-        fetch(`https://saavn.dev/api/search/songs?query=viral&limit=6`),
-        fetch(`https://saavn.dev/api/search/songs?query=top%20hits&limit=9`)
+      
+      // Language-aware search for viral and top charts with deduplication
+      const searchWithLanguageFilter = async (query: string, limit: number = 6) => {
+        const response = await fetch(`https://saavn.dev/api/search/songs?query=${encodeURIComponent(query)}&limit=${limit * 2}`);
+        const data = await response.json();
+        let tracks = data?.data?.results || [];
+        
+        // Filter by language and dedupe
+        const seenIds = new Set<string>();
+        tracks = tracks.filter((track: any) => {
+          if (seenIds.has(track.id)) return false;
+          seenIds.add(track.id);
+          
+          const trackLang = track.language?.toLowerCase();
+          if (trackLang && effective.length > 0) {
+            return effective.some(lang => 
+              trackLang.includes(lang.toLowerCase()) || lang.toLowerCase().includes(trackLang)
+            );
+          }
+          return true;
+        }).slice(0, limit);
+        
+        return tracks;
+      };
+
+      const [heavyRotation, topTracks] = await Promise.all([
+        searchWithLanguageFilter('viral', 6),
+        searchWithLanguageFilter('top hits', 9)
       ]);
-      const viralData = await viralResp.json();
-      const topData = await topResp.json();
-      const heavyRotation = viralData?.data?.results || [];
-      const topTracks = topData?.data?.results || [];
+      
       setMadeForYou(trendingTracks.slice(0, 6));
       setViralSongs(heavyRotation.slice(0, 6));
       setTopCharts(topTracks.slice(0, 9));
@@ -358,7 +428,7 @@ const EnhancedMusicApp: React.FC = () => {
     setShowSuggestions(false);
     try {
       console.log(`🔍 Searching (enhanced) for: "${query}"`);
-      const { results, suggestions } = await enhancedMusicService.searchWithSuggestions(query);
+      const { results, suggestions } = await enhancedMusicService.searchWithSuggestions(query, preferredLanguages.length > 0 ? preferredLanguages : undefined);
       // Small artificial delay for smoother skeleton transition
       await new Promise(r => setTimeout(r, 400));
       setSearchResults(results);
@@ -859,7 +929,16 @@ const EnhancedMusicApp: React.FC = () => {
       try {
         await rebuildArtistCounts(user.id);
         const rows = await recommendTracks(user.id);
-        if (!ignore) setRecommended((rows as any[]).map((r:any) => fromDbTrack(r)));
+        const mapped = (rows as any[]).map((r:any) => fromDbTrack(r));
+        // Dedupe by track id to avoid duplicate keys and UI confusion
+        const seen = new Set<string>();
+        const deduped: AppTrack[] = [] as any;
+        for (const t of mapped as AppTrack[]) {
+          if (!t) continue;
+          const id = t.id;
+          if (!seen.has(id)) { seen.add(id); deduped.push(t); }
+        }
+        if (!ignore) setRecommended(deduped);
       } catch (e) {
         console.warn('⚠️ Failed to load recommendations', e);
         if (!ignore) setRecommended([]);
@@ -1435,9 +1514,9 @@ const EnhancedMusicApp: React.FC = () => {
                   <h2 className="text-2xl font-bold text-white">✨ Recommended For You</h2>
                 </div>
                 <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
-                  {recommended.map((track) => (
+                  {recommended.map((track, idx) => (
                     <Card 
-                      key={`rec-${track.id}`}
+                      key={`rec-${track.id}-${idx}`}
                       className="p-3 hover:bg-gray-750 transition-all duration-300 cursor-pointer group bg-gradient-to-b from-emerald-900/20 to-gray-900/80 border border-emerald-700/30"
                       onClick={() => playTrack(track)}
                     >
@@ -1698,44 +1777,81 @@ const EnhancedMusicApp: React.FC = () => {
                     <span className="text-[11px] text-gray-200">Liked</span>
                   </button>
                 </div>
-                {/* Language preferences */}
-                <div className="space-y-2">
-                  <p className="text-[11px] uppercase tracking-wide text-gray-400">Music languages</p>
-                  <div className="flex flex-wrap gap-2">
-                    {['english','hindi','tamil','telugu','punjabi','bengali','kannada','marathi','malayalam','gujarati'].map(lang => {
-                      const active = preferredLanguages.includes(lang);
+                {/* Language preferences (enhanced) */}
+                <div className="space-y-3">
+                  <div className="flex items-center justify-between">
+                    <p className="text-[11px] uppercase tracking-wide text-gray-400">Music languages</p>
+                    <div className="flex gap-1">
+                      <button
+                        onClick={() => setPendingLanguages(['english','hindi'])}
+                        className="px-2 py-1 rounded-md bg-white/5 hover:bg-white/10 text-[10px] text-gray-300 border border-white/10"
+                      >Default</button>
+                      <button
+                        onClick={() => setPendingLanguages(['english','hindi','tamil','telugu'])}
+                        className="px-2 py-1 rounded-md bg-white/5 hover:bg-white/10 text-[10px] text-gray-300 border border-white/10"
+                      >Mixed</button>
+                      <button
+                        onClick={() => setPendingLanguages(['english'])}
+                        className="px-2 py-1 rounded-md bg-white/5 hover:bg-white/10 text-[10px] text-gray-300 border border-white/10"
+                      >English</button>
+                    </div>
+                  </div>
+                  <div className="flex flex-wrap gap-2 max-h-32 overflow-y-auto pr-1 custom-scrollbar">
+                    {['english','hindi','tamil','telugu','punjabi','bengali','kannada','marathi','malayalam','gujarati','odia','urdu'].map(lang => {
+                      const active = pendingLanguages.includes(lang);
                       return (
                         <button
                           key={lang}
-                          onClick={async () => {
-                            setPreferredLanguages(prev => {
-                              const next = prev.includes(lang) ? prev.filter(l=>l!==lang) : [...prev, lang];
-                              try { localStorage.setItem('vibestream_langs', JSON.stringify(next)); } catch {}
-                              return next;
-                            });
-                          }}
-                          className={`px-2.5 py-1 rounded-full border text-xs ${active ? 'bg-emerald-500/20 border-emerald-500/40 text-emerald-300' : 'bg-white/5 border-white/10 text-gray-200 hover:bg-white/10'}`}
+                          onClick={() => setPendingLanguages(prev => prev.includes(lang) ? prev.filter(l=>l!==lang) : [...prev, lang])}
+                          className={`px-3 py-1.5 rounded-full text-xs font-medium border transition-all focus:outline-none focus:ring-2 focus:ring-emerald-500/40 ${active ? 'bg-emerald-500/20 border-emerald-400/50 text-emerald-300 shadow-inner shadow-emerald-500/10' : 'bg-white/5 border-white/10 text-gray-200 hover:bg-white/10'}`}
+                          aria-pressed={active}
                         >
-                          {lang.charAt(0).toUpperCase() + lang.slice(1)}
+                          {active && <span className="mr-1">✓</span>}{lang.charAt(0).toUpperCase()+lang.slice(1)}
                         </button>
                       );
                     })}
                   </div>
+                  <div className="flex items-center justify-between text-[11px] text-gray-400">
+                    <span>{pendingLanguages.length} selected</span>
+                    <div className="flex gap-2">
+                      <button onClick={() => setPendingLanguages([])} className="hover:text-gray-200">Clear</button>
+                      <button onClick={() => setPendingLanguages(['english','hindi','tamil','telugu','punjabi'])} className="hover:text-gray-200">All Popular</button>
+                    </div>
+                  </div>
                   {user && (
                     <button
                       onClick={async () => {
-                        const langs = preferredLanguages;
+                        if (isSavingPrefs) return;
+                        const langs = pendingLanguages;
                         try {
+                          setIsSavingPrefs(true);
+                          setPreferredLanguages(langs);
+                          try { localStorage.setItem('vibestream_langs', JSON.stringify(langs)); } catch {}
                           await savePreferredLanguages(user.id, langs);
-                          // reload home modules using selected langs
                           await loadHomeCategories(langs);
-                        } catch {}
-                        setShowUserMenu(false);
+                          setCurrentView('home');
+                          try { window.scrollTo({ top: 0, behavior: 'smooth' }); } catch {}
+                          setSavedPrefsAt(Date.now());
+                          setTimeout(()=> setSavedPrefsAt(null), 2000);
+                          setTimeout(()=> setShowUserMenu(false), 800);
+                        } finally {
+                          setIsSavingPrefs(false);
+                        }
                       }}
-                      className="mt-2 w-full py-2 rounded-lg bg-white/5 hover:bg-white/10 border border-white/10 text-sm"
+                      className={`w-full py-2 rounded-lg border text-sm font-medium transition-all ${isSavingPrefs ? 'bg-white/5 border-white/10 opacity-80' : 'bg-emerald-500/10 border-emerald-500/30 hover:bg-emerald-500/20 text-emerald-200'}`}
                     >
-                      Save preferences
+                      <span className="inline-flex items-center gap-2">
+                        {isSavingPrefs ? (
+                          <span className="inline-block w-4 h-4 border-2 border-emerald-400 border-t-transparent rounded-full animate-spin" />
+                        ) : savedPrefsAt ? (
+                          <Check className="w-4 h-4 text-emerald-300" />
+                        ) : null}
+                        {savedPrefsAt ? 'Saved' : isSavingPrefs ? 'Saving…' : 'Apply & Save'}
+                      </span>
                     </button>
+                  )}
+                  {!user && (
+                    <p className="text-[10px] text-gray-500">Sign in to sync preferences across devices.</p>
                   )}
                 </div>
                 {recentlyPlayed.length > 0 && (
@@ -1772,6 +1888,128 @@ const EnhancedMusicApp: React.FC = () => {
 
         {/* Desktop tabs underline removed to avoid duplicating sidebar navigation */}
       </header>
+
+      {/* Mobile user menu */}
+      {showUserMenu && (
+        <>
+        <div className="md:hidden fixed inset-0 z-40 bg-black/40 backdrop-blur-sm" onClick={(e) => {e.stopPropagation(); setShowUserMenu(false);}} />
+        <div ref={mobileUserMenuRef} className="md:hidden fixed top-[70px] left-1/2 -translate-x-1/2 w-[92%] z-50 rounded-2xl border border-white/10 bg-[#0B0F14]/95 shadow-2xl backdrop-blur p-4 space-y-3">
+          <div className="flex items-center gap-3">
+            <img src={LOGO_URL} alt="VibeStream" className="w-7 h-7 rounded-md ring-1 ring-white/10 object-contain" />
+            <div className="min-w-0">
+              <p className="text-xs text-gray-400">Hey{user ? ',' : ''}</p>
+              <p className="text-sm text-white truncate">{displayName}</p>
+            </div>
+          </div>
+          <div className="grid grid-cols-3 gap-2">
+            <button onClick={() => { setCurrentView('trending'); setShowUserMenu(false); }} className="p-3 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 flex flex-col items-center gap-2">
+              <TrendingUp className="w-5 h-5 text-emerald-300" />
+              <span className="text-[11px] text-gray-200">Trending</span>
+            </button>
+            <button onClick={() => { setCurrentView('playlists'); setShowUserMenu(false); }} className="p-3 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 flex flex-col items-center gap-2">
+              <List className="w-5 h-5 text-emerald-300" />
+              <span className="text-[11px] text-gray-200">Playlists</span>
+            </button>
+            <button onClick={() => { setCurrentView('liked'); setShowUserMenu(false); }} className="p-3 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 flex flex-col items-center gap-2">
+              <Heart className="w-5 h-5 text-emerald-300" />
+              <span className="text-[11px] text-gray-200">Liked</span>
+            </button>
+          </div>
+          {recentlyPlayed.length > 0 && (
+            <div className="space-y-2">
+              <p className="text-[11px] uppercase tracking-wide text-gray-400">Recent</p>
+              <div className="space-y-1">
+                {recentlyPlayed.slice(0,3).map((t, i) => (
+                  <button key={`${t.id}-m-${i}`} onClick={() => { playTrack(t); setShowUserMenu(false); }} className="w-full flex items-center gap-3 px-2 py-1.5 rounded-lg hover:bg-white/5">
+                    <img src={getImageUrl(t)} alt={t.name} className="w-8 h-8 rounded object-cover" />
+                    <div className="min-w-0 text-left">
+                      <p className="text-xs text-white truncate">{t.name}</p>
+                      <p className="text-[10px] text-gray-400 truncate">{t.artists.primary.map(a=>a.name).join(', ')}</p>
+                    </div>
+                    <Play className="w-3.5 h-3.5 text-emerald-300 ml-auto" />
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+          {/* Language preferences (mobile enhanced) */}
+          <div className="space-y-3">
+            <div className="flex items-center justify-between">
+              <p className="text-[11px] uppercase tracking-wide text-gray-400">Music languages</p>
+              <div className="flex gap-1">
+                <button onClick={() => setPendingLanguages(['english','hindi'])} className="px-2 py-1 rounded-md bg-white/5 hover:bg-white/10 text-[10px] text-gray-300 border border-white/10">Default</button>
+                <button onClick={() => setPendingLanguages(['english','hindi','tamil','telugu'])} className="px-2 py-1 rounded-md bg-white/5 hover:bg-white/10 text-[10px] text-gray-300 border border-white/10">Mixed</button>
+              </div>
+            </div>
+            <div className="flex flex-wrap gap-2 max-h-32 overflow-y-auto pr-1 custom-scrollbar">
+              {['english','hindi','tamil','telugu','punjabi','bengali','kannada','marathi','malayalam','gujarati','odia','urdu'].map(lang => {
+                const active = pendingLanguages.includes(lang);
+                return (
+                  <button
+                    key={`m-${lang}`}
+                    onClick={() => setPendingLanguages(prev => prev.includes(lang) ? prev.filter(l=>l!==lang) : [...prev, lang])}
+                    className={`px-3 py-1.5 rounded-full text-xs font-medium border transition-all focus:outline-none focus:ring-2 focus:ring-emerald-500/40 ${active ? 'bg-emerald-500/20 border-emerald-400/50 text-emerald-300 shadow-inner shadow-emerald-500/10' : 'bg-white/5 border-white/10 text-gray-200 hover:bg-white/10'}`}
+                    aria-pressed={active}
+                  >
+                    {active && <span className="mr-1">✓</span>}{lang.charAt(0).toUpperCase()+lang.slice(1)}
+                  </button>
+                );
+              })}
+            </div>
+            <div className="flex items-center justify-between text-[11px] text-gray-400">
+              <span>{pendingLanguages.length} selected</span>
+              <div className="flex gap-2">
+                <button onClick={() => setPendingLanguages([])} className="hover:text-gray-200">Clear</button>
+                <button onClick={() => setPendingLanguages(['english','hindi','tamil','telugu','punjabi'])} className="hover:text-gray-200">All Popular</button>
+              </div>
+            </div>
+            {user && (
+              <button
+                onClick={async () => {
+                  if (isSavingPrefs) return;
+                  const langs = pendingLanguages;
+                  try {
+                    setIsSavingPrefs(true);
+                    setPreferredLanguages(langs);
+                    try { localStorage.setItem('vibestream_langs', JSON.stringify(langs)); } catch {}
+                    await savePreferredLanguages(user.id, langs);
+                    await loadHomeCategories(langs);
+                    setCurrentView('home');
+                    try { window.scrollTo({ top: 0, behavior: 'smooth' }); } catch {}
+                    setSavedPrefsAt(Date.now());
+                    setTimeout(()=> setSavedPrefsAt(null), 2000);
+                  } finally {
+                    setIsSavingPrefs(false);
+                    setTimeout(()=> setShowUserMenu(false), 800);
+                  }
+                }}
+                className={`w-full py-2 rounded-lg border text-sm font-medium transition-all ${isSavingPrefs ? 'bg-white/5 border-white/10 opacity-80' : 'bg-emerald-500/10 border-emerald-500/30 hover:bg-emerald-500/20 text-emerald-200'}`}
+              >
+                <span className="inline-flex items-center gap-2">
+                  {isSavingPrefs ? (
+                    <span className="inline-block w-4 h-4 border-2 border-emerald-400 border-t-transparent rounded-full animate-spin" />
+                  ) : savedPrefsAt ? (
+                    <Check className="w-4 h-4 text-emerald-300" />
+                  ) : null}
+                  {savedPrefsAt ? 'Saved' : isSavingPrefs ? 'Saving…' : 'Apply & Save'}
+                </span>
+              </button>
+            )}
+            {!user && (
+              <p className="text-[10px] text-gray-500">Sign in to sync preferences across devices.</p>
+            )}
+          </div>
+          <div className="space-y-2">
+            {isGuest ? (
+              <button onClick={() => { auth.openAuthPrompt('cta'); setShowUserMenu(false); }} className="w-full py-2.5 rounded-xl bg-emerald-500 text-gray-900 font-semibold hover:bg-emerald-400 transition shadow-lg shadow-emerald-500/20">Sign in to unlock full songs</button>
+            ) : (
+              <button onClick={() => { auth.signOut(); setShowUserMenu(false); }} className="w-full py-2 rounded-xl bg-white/0 text-red-300 hover:text-red-200 hover:bg-white/5 border border-white/10">Sign out</button>
+            )}
+          </div>
+        </div>
+        </>
+      )}
+
       {/* Layout */}
       <div className="flex flex-1 min-h-0">
         <aside className="hidden md:block w-64 bg-[#0B0F14] border-r border-white/10 p-4">
@@ -1877,6 +2115,15 @@ const EnhancedMusicApp: React.FC = () => {
         <div className="fixed bottom-12 left-1/2 -translate-x-1/2 z-30">
           <div className="backdrop-blur-xl bg-white/5 border border-white/10 text-white text-xs px-4 py-2 rounded-full shadow-lg">
             Sign in for full songs & save
+          </div>
+        </div>
+      )}
+
+      {/* Save preferences toast */}
+      {savedPrefsAt && (
+        <div className="fixed top-4 left-1/2 -translate-x-1/2 z-[100]">
+          <div className="backdrop-blur-xl bg-emerald-600/20 border border-emerald-500/40 text-emerald-200 text-sm px-4 py-2 rounded-full shadow-lg inline-flex items-center gap-2">
+            <Check className="w-4 h-4" /> Preferences saved
           </div>
         </div>
       )}

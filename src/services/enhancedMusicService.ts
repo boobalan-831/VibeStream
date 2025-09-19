@@ -121,7 +121,25 @@ class EnhancedMusicService {
       const data: SaavnModulesResponse = await response.json();
       
       if (data.success) {
-  console.log(`✅ Loaded home page modules for languages: ${langCsv}`);
+        // Filter and dedupe the trending songs by language and ID
+        if (data.data.trending?.songs) {
+          const seenIds = new Set<string>();
+          data.data.trending.songs = data.data.trending.songs.filter(track => {
+            if (seenIds.has(track.id)) return false;
+            seenIds.add(track.id);
+            
+            // Filter by language if track has language info
+            const trackLang = track.language?.toLowerCase();
+            if (trackLang && languages.length > 0) {
+              return languages.some(lang => 
+                trackLang.includes(lang.toLowerCase()) || lang.toLowerCase().includes(trackLang)
+              );
+            }
+            return true; // Keep tracks without language info
+          });
+        }
+        
+        console.log(`✅ Loaded home page modules for languages: ${langCsv}`);
         this.setCache(cacheKey, data);
         return data;
       } else {
@@ -132,9 +150,7 @@ class EnhancedMusicService {
       console.error('❌ Failed to load home page modules:', error);
       return { success: false, data: {} };
     }
-  }
-
-  async getMadeForYouSongs(): Promise<SaavnSearchResponse> {
+  }  async getMadeForYouSongs(): Promise<SaavnSearchResponse> {
     try {
       console.log('🔥 Fetching "Made For You" songs...');
       const url = `${this.baseUrl}/search/songs?query=relaxing&limit=6`;
@@ -328,13 +344,31 @@ class EnhancedMusicService {
     return tracks.map(track => this.convertToAppSong(track));
   }
 
-  // Search with auto-suggestions
-  async searchWithSuggestions(query: string): Promise<{
+  // Search with auto-suggestions and language filtering
+  async searchWithSuggestions(query: string, preferredLanguages?: string[]): Promise<{
     results: SaavnTrack[];
     suggestions: string[];
   }> {
     const searchResult = await this.searchSongs(query);
-    const results = searchResult.success ? searchResult.data.results : [];
+    let results = searchResult.success ? searchResult.data.results : [];
+    
+    // Filter by preferred languages if provided
+    if (preferredLanguages && preferredLanguages.length > 0) {
+      results = results.filter(track => {
+        const trackLang = track.language?.toLowerCase();
+        return !trackLang || preferredLanguages.some(lang => 
+          trackLang.includes(lang.toLowerCase()) || lang.toLowerCase().includes(trackLang)
+        );
+      });
+    }
+
+    // Deduplicate results by track ID
+    const seenIds = new Set<string>();
+    results = results.filter(track => {
+      if (seenIds.has(track.id)) return false;
+      seenIds.add(track.id);
+      return true;
+    });
     
     // Generate suggestions based on search results
     const suggestions: string[] = [];
